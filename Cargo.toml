@@ -1,0 +1,21 @@
+[package]
+name = "rust_lib_flutter_rust_wallet"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+flutter_rust_bridge = "=2.11.1"
+minotari-wallet = { package = "minotari", git = "https://github.com/tari-project/minotari-cli.git", branch = "main" }
+tari_common_types = { git = "https://github.com/tari-project/tari.git", tag = "v5.2.0-rc.0" }
+tari_common = { git = "https://github.com/tari-project/tari.git", tag = "v5.2.0-rc.0" }
+tari_crypto = "0.22.1"
+tari_transaction_components = { git = "https://github.com/tari-project/tari.git", tag = "v5.2.0-rc.0" }
+tari_utilities = "0.8.0"
+once_cell = "1.21.3"
+anyhow = "1.0.100"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
