@@ -1,4 +1,6 @@
 use crate::api::db::DB_PATH;
+use crate::api::network::parse_network;
+use anyhow::{anyhow, Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::init_with_view_key;
 use std::str::FromStr;
@@ -22,7 +24,7 @@ pub struct WalletCreationDetails {
 }
 
 #[frb]
-pub async fn create_wallet(network: Option<String>) -> Result<WalletCreationDetails, String> {
+pub async fn create_wallet(network: Option<String>) -> Result<WalletCreationDetails> {
     let network = parse_network(network)?;
     let seed = CipherSeed::random();
 
@@ -37,15 +39,15 @@ pub async fn restore_wallet(
     seed_words: Vec<String>,
     passphrase: Option<String>,
     network: Option<String>,
-) -> Result<WalletCreationDetails, String> {
+) -> Result<WalletCreationDetails> {
     let network = parse_network(network)?;
-    let mnemonic = SeedWords::from_str(&seed_words.join(" ")).map_err(|_| "Invalid seed words")?;
+    let mnemonic = SeedWords::from_str(&seed_words.join(" ")).context("Invalid seed words")?;
     let password = passphrase
         .map(|p| SafePassword::from_str(&p))
         .transpose()
-        .map_err(|_| "Invalid password")?;
+        .map_err(|_| anyhow!("Invalid password"))?;
 
-    let seed = CipherSeed::from_mnemonic(&mnemonic, password).map_err(|_| "Invalid cipher seed")?;
+    let seed = CipherSeed::from_mnemonic(&mnemonic, password).context("Invalid cipher seed")?;
 
     let details = generate_details_from_seed(seed, network)?;
     initialize_wallet(&details)?;
@@ -53,22 +55,13 @@ pub async fn restore_wallet(
     Ok(details)
 }
 
-fn parse_network(network: Option<String>) -> Result<Network, String> {
-    network
-        .as_deref()
-        .map_or_else(|| Ok(Network::MainNet), Network::from_str)
-        .map_err(|err| err.to_string())
-}
-
-fn generate_details_from_seed(
-    seed: CipherSeed,
-    network: Network,
-) -> Result<WalletCreationDetails, String> {
+fn generate_details_from_seed(seed: CipherSeed, network: Network) -> Result<WalletCreationDetails> {
     let wallet_birthday = seed.birthday();
     let wallet_type = WalletType::SeedWords(
-        SeedWordsWallet::construct_new(seed).map_err(|_| "Failed to construct wallet from seed")?,
+        SeedWordsWallet::construct_new(seed)
+            .map_err(|_| anyhow!("Failed to construct wallet from seed"))?,
     );
-    let key_manager = KeyManager::new(wallet_type).map_err(|_| "Failed to create key manager")?;
+    let key_manager = KeyManager::new(wallet_type).context("Failed to create key manager")?;
 
     let view_key = key_manager.get_private_view_key();
     let spend_key = key_manager.get_spend_key();
@@ -81,7 +74,7 @@ fn generate_details_from_seed(
         TariAddressFeatures::create_one_sided_only(),
         None,
     )
-    .map_err(|_| "Failed to generate Tari address")?;
+    .context("Failed to generate Tari address")?;
 
     Ok(WalletCreationDetails {
         tari_address: tari_address.to_base58(),
@@ -91,8 +84,8 @@ fn generate_details_from_seed(
     })
 }
 
-fn initialize_wallet(details: &WalletCreationDetails) -> Result<(), String> {
-    let db = DB_PATH.get().ok_or("Database path not initialized")?;
+fn initialize_wallet(details: &WalletCreationDetails) -> Result<()> {
+    let db = DB_PATH.get().context("Database path not initialized")?;
     init_with_view_key(
         &details.view_private_key_hex,
         &details.spend_public_key_hex,
@@ -101,7 +94,7 @@ fn initialize_wallet(details: &WalletCreationDetails) -> Result<(), String> {
         0,
         None,
     )
-    .map_err(|e| e.to_string())?;
+    .context("failed to initialize wallet")?;
 
     Ok(())
 }
