@@ -3045,6 +3045,8 @@ dependencies = [
  "flutter_rust_bridge",
  "minotari",
  "once_cell",
+ "r2d2",
+ "r2d2_sqlite",
  "tari_common",
  "tari_common_types",
  "tari_crypto",

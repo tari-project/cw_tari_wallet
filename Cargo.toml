@@ -12,6 +12,8 @@ chrono = "0.4.42"
 flutter_rust_bridge = "=2.11.1"
 minotari-wallet = { package = "minotari", git = "https://github.com/martinserts/minotari-cli.git", branch = "rework-db-layer" }
 once_cell = "1.21.3"
+r2d2 = "0.8.10"
+r2d2_sqlite = "0.31.0"
 tari_common = { git = "https://github.com/tari-project/tari.git", rev = "32b2e748cc1800823aebfa1d32799d2d9fee3bf5" }
 tari_common_types = { git = "https://github.com/tari-project/tari.git", rev = "32b2e748cc1800823aebfa1d32799d2d9fee3bf5" }
 tari_crypto = "0.22.1"

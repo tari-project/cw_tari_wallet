@@ -1,4 +1,4 @@
-use crate::api::db::DB_PATH;
+use crate::api::db::get_db_path;
 use crate::api::network::parse_network;
 use anyhow::{anyhow, Context, Result};
 use flutter_rust_bridge::frb;
@@ -85,12 +85,12 @@ fn generate_details_from_seed(seed: CipherSeed, network: Network) -> Result<Wall
 }
 
 fn initialize_wallet(details: &WalletCreationDetails) -> Result<()> {
-    let db = DB_PATH.get().context("Database path not initialized")?;
+    let db = get_db_path()?;
     init_with_view_key(
         &details.view_private_key_hex,
         &details.spend_public_key_hex,
         "",
-        db,
+        &db,
         0,
         None,
     )

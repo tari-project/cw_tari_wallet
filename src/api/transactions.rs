@@ -1,8 +1,8 @@
-use crate::api::db::DB_PATH;
+use crate::api::db::get_db_connection;
 use anyhow::{Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::{
-    db::get_displayed_transactions_paginated, get_accounts, init_db, utils::format_timestamp,
+    db::get_displayed_transactions_paginated, get_accounts, utils::format_timestamp,
 };
 
 #[frb]
@@ -91,15 +91,13 @@ pub fn get_transactions(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<DisplayedTransactionDto>> {
-    let db = DB_PATH.get().context("Database path not initialized")?;
-    let pool = init_db(db)?;
-    let mut conn = pool.get()?;
-    let account = &get_accounts(&mut conn, wallet_name.as_deref())?[0];
+    let mut conn = get_db_connection()?;
+    let accounts = &get_accounts(&mut conn, wallet_name.as_deref())?;
+    let account = accounts
+        .first()
+        .context("No accounts found for this wallet")?;
 
     let transactions = get_displayed_transactions_paginated(&conn, account.id, limit, offset)?;
 
-    Ok(transactions
-        .into_iter()
-        .map(DisplayedTransactionDto::from)
-        .collect())
+    Ok(transactions.into_iter().map(Into::into).collect())
 }
