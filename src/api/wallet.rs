@@ -24,7 +24,7 @@ pub struct WalletCreationDetails {
 }
 
 #[frb]
-pub async fn create_wallet(network: Option<String>) -> Result<WalletCreationDetails> {
+pub fn create_wallet(network: Option<String>) -> Result<WalletCreationDetails> {
     let network = parse_network(network)?;
     let seed = CipherSeed::random();
 
@@ -35,7 +35,7 @@ pub async fn create_wallet(network: Option<String>) -> Result<WalletCreationDeta
 }
 
 #[frb]
-pub async fn restore_wallet(
+pub fn restore_wallet(
     seed_words: Vec<String>,
     passphrase: Option<String>,
     network: Option<String>,

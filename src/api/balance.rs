@@ -24,7 +24,7 @@ impl From<minotari_wallet::db::AccountBalance> for AccountBalanceDto {
 }
 
 #[frb]
-pub async fn get_balance(name: Option<String>) -> Result<AccountBalanceDto> {
+pub fn get_balance(name: Option<String>) -> Result<AccountBalanceDto> {
     let db = DB_PATH.get().context("Database path not initialized")?;
     let pool = init_db(db)?;
     let mut conn = pool.get()?;

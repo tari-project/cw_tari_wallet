@@ -51,7 +51,7 @@ fn wire__crate__api__wallet__create_wallet_impl(
     rust_vec_len_: i32,
     data_len_: i32,
 ) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
             debug_name: "create_wallet",
             port: Some(port_),
@@ -69,13 +69,12 @@ fn wire__crate__api__wallet__create_wallet_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_network = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
-            move |context| async move {
+            move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
-                    (move || async move {
-                        let output_ok = crate::api::wallet::create_wallet(api_network).await?;
+                    (move || {
+                        let output_ok = crate::api::wallet::create_wallet(api_network)?;
                         Ok(output_ok)
-                    })()
-                    .await,
+                    })(),
                 )
             }
         },
@@ -87,7 +86,7 @@ fn wire__crate__api__address__get_address_impl(
     rust_vec_len_: i32,
     data_len_: i32,
 ) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
             debug_name: "get_address",
             port: Some(port_),
@@ -107,15 +106,16 @@ fn wire__crate__api__address__get_address_impl(
             let api_passphrase = <Option<String>>::sse_decode(&mut deserializer);
             let api_network = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
-            move |context| async move {
+            move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
-                    (move || async move {
-                        let output_ok =
-                            crate::api::address::get_address(api_name, api_passphrase, api_network)
-                                .await?;
+                    (move || {
+                        let output_ok = crate::api::address::get_address(
+                            api_name,
+                            api_passphrase,
+                            api_network,
+                        )?;
                         Ok(output_ok)
-                    })()
-                    .await,
+                    })(),
                 )
             }
         },
@@ -127,7 +127,7 @@ fn wire__crate__api__balance__get_balance_impl(
     rust_vec_len_: i32,
     data_len_: i32,
 ) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
             debug_name: "get_balance",
             port: Some(port_),
@@ -145,13 +145,12 @@ fn wire__crate__api__balance__get_balance_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_name = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
-            move |context| async move {
+            move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
-                    (move || async move {
-                        let output_ok = crate::api::balance::get_balance(api_name).await?;
+                    (move || {
+                        let output_ok = crate::api::balance::get_balance(api_name)?;
                         Ok(output_ok)
-                    })()
-                    .await,
+                    })(),
                 )
             }
         },
@@ -163,7 +162,7 @@ fn wire__crate__api__db__initialize_database_impl(
     rust_vec_len_: i32,
     data_len_: i32,
 ) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
             debug_name: "initialize_database",
             port: Some(port_),
@@ -181,13 +180,12 @@ fn wire__crate__api__db__initialize_database_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_path = <String>::sse_decode(&mut deserializer);
             deserializer.end();
-            move |context| async move {
+            move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
-                    (move || async move {
-                        let output_ok = crate::api::db::initialize_database(api_path).await?;
+                    (move || {
+                        let output_ok = crate::api::db::initialize_database(api_path)?;
                         Ok(output_ok)
-                    })()
-                    .await,
+                    })(),
                 )
             }
         },
@@ -231,7 +229,7 @@ fn wire__crate__api__wallet__restore_wallet_impl(
     rust_vec_len_: i32,
     data_len_: i32,
 ) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
             debug_name: "restore_wallet",
             port: Some(port_),
@@ -251,18 +249,16 @@ fn wire__crate__api__wallet__restore_wallet_impl(
             let api_passphrase = <Option<String>>::sse_decode(&mut deserializer);
             let api_network = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
-            move |context| async move {
+            move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
-                    (move || async move {
+                    (move || {
                         let output_ok = crate::api::wallet::restore_wallet(
                             api_seed_words,
                             api_passphrase,
                             api_network,
-                        )
-                        .await?;
+                        )?;
                         Ok(output_ok)
-                    })()
-                    .await,
+                    })(),
                 )
             }
         },

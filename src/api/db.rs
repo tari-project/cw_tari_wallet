@@ -7,7 +7,7 @@ use once_cell::sync::OnceCell;
 pub static DB_PATH: OnceCell<String> = OnceCell::new();
 
 #[frb]
-pub async fn initialize_database(path: String) -> anyhow::Result<()> {
+pub fn initialize_database(path: String) -> anyhow::Result<()> {
     println!("initializing database {}", path);
     init_db(&path)?;
 

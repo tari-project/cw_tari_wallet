@@ -4,7 +4,7 @@ use flutter_rust_bridge::frb;
 use minotari_wallet::{get_accounts, init_db};
 
 #[frb]
-pub async fn get_address(
+pub fn get_address(
     name: Option<String>,
     passphrase: Option<String>,
     network: Option<String>,
