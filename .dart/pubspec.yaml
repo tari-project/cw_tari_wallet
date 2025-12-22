@@ -4,7 +4,7 @@ version: 1.0.0
 environment:
   sdk: '>=3.3.0 <4.0.0'
 dependencies:
-  flutter_rust_bridge: any
+  flutter_rust_bridge: ^2.11.1
   freezed_annotation: ^2.4.0
   meta: ^1.10.0
 
