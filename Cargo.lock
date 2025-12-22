@@ -3041,6 +3041,7 @@ name = "rust_lib_flutter_rust_wallet"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "flutter_rust_bridge",
  "minotari",
  "once_cell",

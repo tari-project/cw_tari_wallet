@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1408195817;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 274188080;
 
 // Section: executor
 
@@ -102,7 +102,7 @@ fn wire__crate__api__address__get_address_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_name = <Option<String>>::sse_decode(&mut deserializer);
+            let api_wallet_name = <Option<String>>::sse_decode(&mut deserializer);
             let api_passphrase = <Option<String>>::sse_decode(&mut deserializer);
             let api_network = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -110,7 +110,7 @@ fn wire__crate__api__address__get_address_impl(
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
                         let output_ok = crate::api::address::get_address(
-                            api_name,
+                            api_wallet_name,
                             api_passphrase,
                             api_network,
                         )?;
@@ -143,12 +143,53 @@ fn wire__crate__api__balance__get_balance_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_name = <Option<String>>::sse_decode(&mut deserializer);
+            let api_wallet_name = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
-                        let output_ok = crate::api::balance::get_balance(api_name)?;
+                        let output_ok = crate::api::balance::get_balance(api_wallet_name)?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__transactions__get_transactions_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "get_transactions",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_wallet_name = <Option<String>>::sse_decode(&mut deserializer);
+            let api_limit = <i64>::sse_decode(&mut deserializer);
+            let api_offset = <i64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok = crate::api::transactions::get_transactions(
+                            api_wallet_name,
+                            api_limit,
+                            api_offset,
+                        )?;
                         Ok(output_ok)
                     })(),
                 )
@@ -299,6 +340,83 @@ impl SseDecode for crate::api::balance::AccountBalanceDto {
     }
 }
 
+impl SseDecode for crate::api::transactions::BlockchainInfoDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_blockHeight = <u64>::sse_decode(deserializer);
+        let mut var_timestamp = <String>::sse_decode(deserializer);
+        let mut var_confirmations = <u64>::sse_decode(deserializer);
+        return crate::api::transactions::BlockchainInfoDto {
+            block_height: var_blockHeight,
+            timestamp: var_timestamp,
+            confirmations: var_confirmations,
+        };
+    }
+}
+
+impl SseDecode for crate::api::transactions::CounterpartyInfoDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_address = <String>::sse_decode(deserializer);
+        let mut var_addressEmoji = <Option<String>>::sse_decode(deserializer);
+        let mut var_label = <Option<String>>::sse_decode(deserializer);
+        return crate::api::transactions::CounterpartyInfoDto {
+            address: var_address,
+            address_emoji: var_addressEmoji,
+            label: var_label,
+        };
+    }
+}
+
+impl SseDecode for crate::api::transactions::DisplayedTransactionDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <String>::sse_decode(deserializer);
+        let mut var_direction = <String>::sse_decode(deserializer);
+        let mut var_source = <String>::sse_decode(deserializer);
+        let mut var_status = <String>::sse_decode(deserializer);
+        let mut var_amount = <u64>::sse_decode(deserializer);
+        let mut var_amountDisplay = <String>::sse_decode(deserializer);
+        let mut var_message = <Option<String>>::sse_decode(deserializer);
+        let mut var_counterparty =
+            <Option<crate::api::transactions::CounterpartyInfoDto>>::sse_decode(deserializer);
+        let mut var_blockchain =
+            <crate::api::transactions::BlockchainInfoDto>::sse_decode(deserializer);
+        let mut var_fee = <Option<crate::api::transactions::FeeInfoDto>>::sse_decode(deserializer);
+        return crate::api::transactions::DisplayedTransactionDto {
+            id: var_id,
+            direction: var_direction,
+            source: var_source,
+            status: var_status,
+            amount: var_amount,
+            amount_display: var_amountDisplay,
+            message: var_message,
+            counterparty: var_counterparty,
+            blockchain: var_blockchain,
+            fee: var_fee,
+        };
+    }
+}
+
+impl SseDecode for crate::api::transactions::FeeInfoDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_amount = <u64>::sse_decode(deserializer);
+        let mut var_amountDisplay = <String>::sse_decode(deserializer);
+        return crate::api::transactions::FeeInfoDto {
+            amount: var_amount,
+            amount_display: var_amountDisplay,
+        };
+    }
+}
+
+impl SseDecode for i64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_i64::<NativeEndian>().unwrap()
+    }
+}
+
 impl SseDecode for Vec<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -306,6 +424,20 @@ impl SseDecode for Vec<String> {
         let mut ans_ = vec![];
         for idx_ in 0..len_ {
             ans_.push(<String>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::transactions::DisplayedTransactionDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = vec![];
+        for idx_ in 0..len_ {
+            ans_.push(
+                <crate::api::transactions::DisplayedTransactionDto>::sse_decode(deserializer),
+            );
         }
         return ans_;
     }
@@ -328,6 +460,32 @@ impl SseDecode for Option<String> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<String>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<crate::api::transactions::CounterpartyInfoDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::transactions::CounterpartyInfoDto>::sse_decode(
+                deserializer,
+            ));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<crate::api::transactions::FeeInfoDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::transactions::FeeInfoDto>::sse_decode(
+                deserializer,
+            ));
         } else {
             return None;
         }
@@ -402,9 +560,12 @@ fn pde_ffi_dispatcher_primary_impl(
         1 => wire__crate__api__wallet__create_wallet_impl(port, ptr, rust_vec_len, data_len),
         2 => wire__crate__api__address__get_address_impl(port, ptr, rust_vec_len, data_len),
         3 => wire__crate__api__balance__get_balance_impl(port, ptr, rust_vec_len, data_len),
-        4 => wire__crate__api__db__initialize_database_impl(port, ptr, rust_vec_len, data_len),
-        5 => wire__crate__api__seeds__list_words_impl(port, ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__wallet__restore_wallet_impl(port, ptr, rust_vec_len, data_len),
+        4 => {
+            wire__crate__api__transactions__get_transactions_impl(port, ptr, rust_vec_len, data_len)
+        }
+        5 => wire__crate__api__db__initialize_database_impl(port, ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__seeds__list_words_impl(port, ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__wallet__restore_wallet_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -443,6 +604,100 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::balance::AccountBalanceDto>
     for crate::api::balance::AccountBalanceDto
 {
     fn into_into_dart(self) -> crate::api::balance::AccountBalanceDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::transactions::BlockchainInfoDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.block_height.into_into_dart().into_dart(),
+            self.timestamp.into_into_dart().into_dart(),
+            self.confirmations.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::transactions::BlockchainInfoDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::transactions::BlockchainInfoDto>
+    for crate::api::transactions::BlockchainInfoDto
+{
+    fn into_into_dart(self) -> crate::api::transactions::BlockchainInfoDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::transactions::CounterpartyInfoDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.address.into_into_dart().into_dart(),
+            self.address_emoji.into_into_dart().into_dart(),
+            self.label.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::transactions::CounterpartyInfoDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::transactions::CounterpartyInfoDto>
+    for crate::api::transactions::CounterpartyInfoDto
+{
+    fn into_into_dart(self) -> crate::api::transactions::CounterpartyInfoDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::transactions::DisplayedTransactionDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.id.into_into_dart().into_dart(),
+            self.direction.into_into_dart().into_dart(),
+            self.source.into_into_dart().into_dart(),
+            self.status.into_into_dart().into_dart(),
+            self.amount.into_into_dart().into_dart(),
+            self.amount_display.into_into_dart().into_dart(),
+            self.message.into_into_dart().into_dart(),
+            self.counterparty.into_into_dart().into_dart(),
+            self.blockchain.into_into_dart().into_dart(),
+            self.fee.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::transactions::DisplayedTransactionDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::transactions::DisplayedTransactionDto>
+    for crate::api::transactions::DisplayedTransactionDto
+{
+    fn into_into_dart(self) -> crate::api::transactions::DisplayedTransactionDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::transactions::FeeInfoDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.amount.into_into_dart().into_dart(),
+            self.amount_display.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::transactions::FeeInfoDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::transactions::FeeInfoDto>
+    for crate::api::transactions::FeeInfoDto
+{
+    fn into_into_dart(self) -> crate::api::transactions::FeeInfoDto {
         self
     }
 }
@@ -494,12 +749,74 @@ impl SseEncode for crate::api::balance::AccountBalanceDto {
     }
 }
 
+impl SseEncode for crate::api::transactions::BlockchainInfoDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u64>::sse_encode(self.block_height, serializer);
+        <String>::sse_encode(self.timestamp, serializer);
+        <u64>::sse_encode(self.confirmations, serializer);
+    }
+}
+
+impl SseEncode for crate::api::transactions::CounterpartyInfoDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.address, serializer);
+        <Option<String>>::sse_encode(self.address_emoji, serializer);
+        <Option<String>>::sse_encode(self.label, serializer);
+    }
+}
+
+impl SseEncode for crate::api::transactions::DisplayedTransactionDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.id, serializer);
+        <String>::sse_encode(self.direction, serializer);
+        <String>::sse_encode(self.source, serializer);
+        <String>::sse_encode(self.status, serializer);
+        <u64>::sse_encode(self.amount, serializer);
+        <String>::sse_encode(self.amount_display, serializer);
+        <Option<String>>::sse_encode(self.message, serializer);
+        <Option<crate::api::transactions::CounterpartyInfoDto>>::sse_encode(
+            self.counterparty,
+            serializer,
+        );
+        <crate::api::transactions::BlockchainInfoDto>::sse_encode(self.blockchain, serializer);
+        <Option<crate::api::transactions::FeeInfoDto>>::sse_encode(self.fee, serializer);
+    }
+}
+
+impl SseEncode for crate::api::transactions::FeeInfoDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u64>::sse_encode(self.amount, serializer);
+        <String>::sse_encode(self.amount_display, serializer);
+    }
+}
+
+impl SseEncode for i64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_i64::<NativeEndian>(self).unwrap();
+    }
+}
+
 impl SseEncode for Vec<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <String>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::transactions::DisplayedTransactionDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::transactions::DisplayedTransactionDto>::sse_encode(item, serializer);
         }
     }
 }
@@ -520,6 +837,26 @@ impl SseEncode for Option<String> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <String>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<crate::api::transactions::CounterpartyInfoDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::transactions::CounterpartyInfoDto>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<crate::api::transactions::FeeInfoDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::transactions::FeeInfoDto>::sse_encode(value, serializer);
         }
     }
 }

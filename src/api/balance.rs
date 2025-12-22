@@ -24,11 +24,11 @@ impl From<minotari_wallet::db::AccountBalance> for AccountBalanceDto {
 }
 
 #[frb]
-pub fn get_balance(name: Option<String>) -> Result<AccountBalanceDto> {
+pub fn get_balance(wallet_name: Option<String>) -> Result<AccountBalanceDto> {
     let db = DB_PATH.get().context("Database path not initialized")?;
     let pool = init_db(db)?;
     let mut conn = pool.get()?;
-    let account = &get_accounts(&mut conn, name.as_deref())?[0];
+    let account = &get_accounts(&mut conn, wallet_name.as_deref())?[0];
     let agg_result = get_wallet_balance(&mut conn, account.id)?;
     Ok(agg_result.into())
 }

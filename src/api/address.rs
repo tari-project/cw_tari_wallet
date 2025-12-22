@@ -5,7 +5,7 @@ use minotari_wallet::{get_accounts, init_db};
 
 #[frb]
 pub fn get_address(
-    name: Option<String>,
+    wallet_name: Option<String>,
     passphrase: Option<String>,
     network: Option<String>,
 ) -> Result<String> {
@@ -13,7 +13,7 @@ pub fn get_address(
     let db = DB_PATH.get().context("Database path not initialized")?;
     let pool = init_db(db)?;
     let mut conn = pool.get()?;
-    let account = &get_accounts(&mut conn, name.as_deref())?[0];
+    let account = &get_accounts(&mut conn, wallet_name.as_deref())?[0];
     let address = account.get_address(network, passphrase.as_deref().unwrap_or(""))?;
 
     Ok(address.to_base58())
