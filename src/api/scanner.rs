@@ -4,7 +4,7 @@ use crate::frb_generated::StreamSink;
 use anyhow::{anyhow, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::scan::{DisplayedTransactionsEvent, TransactionsUpdatedEvent};
-use minotari_wallet::{ProcessingEvent, ScanMode, ScanStatusEvent, Scanner};
+use minotari_wallet::{PauseReason, ProcessingEvent, ScanMode, ScanStatusEvent, Scanner};
 use std::sync::RwLock;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -99,7 +99,12 @@ impl From<ScanStatusEvent> for ScanStatusDto {
             } => ScanStatusDto::Paused {
                 account_id,
                 last_scanned_height,
-                reason: format!("{:?}", reason),
+                reason: match reason {
+                    PauseReason::MaxBlocksReached { limit } => {
+                        format!("max blocks reached: {limit}")
+                    }
+                    PauseReason::Cancelled => "cancelled".to_string(),
+                },
             },
             ScanStatusEvent::Waiting {
                 account_id,
