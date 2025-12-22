@@ -8,7 +8,7 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 flutter_rust_bridge = "=2.11.1"
-minotari-wallet = { package = "minotari", git = "https://github.com/tari-project/minotari-cli.git", branch = "main" }
+minotari-wallet = { package = "minotari", git = "https://github.com/martinserts/minotari-cli.git", branch = "rework-db-layer" }
 tari_common_types = { git = "https://github.com/tari-project/tari.git", tag = "v5.2.0-rc.0" }
 tari_common = { git = "https://github.com/tari-project/tari.git", tag = "v5.2.0-rc.0" }
 tari_crypto = "0.22.1"

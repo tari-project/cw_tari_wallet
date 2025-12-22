@@ -67,11 +67,12 @@ fn wire__crate__api__wallet__create_wallet_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_network = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
                     (move || async move {
-                        let output_ok = crate::api::wallet::create_wallet().await?;
+                        let output_ok = crate::api::wallet::create_wallet(api_network).await?;
                         Ok(output_ok)
                     })()
                     .await,
@@ -208,13 +209,17 @@ fn wire__crate__api__wallet__restore_wallet_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_seed_words = <Vec<String>>::sse_decode(&mut deserializer);
             let api_passphrase = <Option<String>>::sse_decode(&mut deserializer);
+            let api_network = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
                     (move || async move {
-                        let output_ok =
-                            crate::api::wallet::restore_wallet(api_seed_words, api_passphrase)
-                                .await?;
+                        let output_ok = crate::api::wallet::restore_wallet(
+                            api_seed_words,
+                            api_passphrase,
+                            api_network,
+                        )
+                        .await?;
                         Ok(output_ok)
                     })()
                     .await,
@@ -245,10 +250,12 @@ impl SseDecode for String {
 impl SseDecode for crate::api::balance::AccountBalanceDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_total = <u64>::sse_decode(deserializer);
         let mut var_unconfirmed = <u64>::sse_decode(deserializer);
         let mut var_locked = <u64>::sse_decode(deserializer);
         let mut var_available = <u64>::sse_decode(deserializer);
         return crate::api::balance::AccountBalanceDto {
+            total: var_total,
             unconfirmed: var_unconfirmed,
             locked: var_locked,
             available: var_available,
@@ -383,6 +390,7 @@ fn pde_ffi_dispatcher_sync_impl(
 impl flutter_rust_bridge::IntoDart for crate::api::balance::AccountBalanceDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
+            self.total.into_into_dart().into_dart(),
             self.unconfirmed.into_into_dart().into_dart(),
             self.locked.into_into_dart().into_dart(),
             self.available.into_into_dart().into_dart(),
@@ -442,6 +450,7 @@ impl SseEncode for String {
 impl SseEncode for crate::api::balance::AccountBalanceDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u64>::sse_encode(self.total, serializer);
         <u64>::sse_encode(self.unconfirmed, serializer);
         <u64>::sse_encode(self.locked, serializer);
         <u64>::sse_encode(self.available, serializer);
