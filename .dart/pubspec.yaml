@@ -2,6 +2,12 @@ name: codegen_mock
 description: A mock package to satisfy flutter_rust_bridge_codegen
 version: 1.0.0
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=3.3.0 <4.0.0'
 dependencies:
   flutter_rust_bridge: any
+  freezed_annotation: ^2.4.0
+  meta: ^1.10.0
+
+dev_dependencies:
+  build_runner: ^2.4.0
+  freezed: ^2.4.0

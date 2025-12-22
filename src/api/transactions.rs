@@ -6,6 +6,7 @@ use minotari_wallet::{
 };
 
 #[frb]
+#[derive(Clone)]
 pub struct FeeInfoDto {
     pub amount: u64,
     pub amount_display: String,
@@ -21,6 +22,7 @@ impl From<minotari_wallet::transactions::FeeInfo> for FeeInfoDto {
 }
 
 #[frb]
+#[derive(Clone)]
 pub struct BlockchainInfoDto {
     pub block_height: u64,
     pub timestamp: String,
@@ -38,6 +40,7 @@ impl From<minotari_wallet::transactions::BlockchainInfo> for BlockchainInfoDto {
 }
 
 #[frb]
+#[derive(Clone)]
 pub struct CounterpartyInfoDto {
     pub address: String,
     pub address_emoji: Option<String>,
@@ -55,6 +58,7 @@ impl From<minotari_wallet::transactions::CounterpartyInfo> for CounterpartyInfoD
 }
 
 #[frb]
+#[derive(Clone)]
 pub struct DisplayedTransactionDto {
     pub id: String,
     pub direction: String,
