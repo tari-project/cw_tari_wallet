@@ -38,3 +38,7 @@ vite-profile*
 tari-win-bundler/.vs
 tari-win-bundler/logs
 tari-win-bundler/bin
+
+# Dart
+.dart/*
+!.dart/pubspec.yaml
