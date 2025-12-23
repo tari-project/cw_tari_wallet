@@ -62,3 +62,13 @@ pub(crate) fn get_db_path() -> Result<String> {
 
     Ok(state.path.clone())
 }
+
+pub(crate) fn get_db_pool() -> Result<Pool<SqliteConnectionManager>> {
+    let guard = DB_STATE
+        .read()
+        .map_err(|_| anyhow!("Failed to lock DB_STATE for reading"))?;
+
+    let state = guard.as_ref().context("Database is not initialized")?;
+
+    Ok(state.pool.clone())
+}
