@@ -1,10 +1,9 @@
-use crate::api::db::get_db_path;
 use crate::api::transactions::DisplayedTransactionDto;
-use crate::frb_generated::StreamSink;
+use crate::{api::db::get_db_path, frb_generated::StreamSink};
 use anyhow::{anyhow, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::scan::{DisplayedTransactionsEvent, TransactionsUpdatedEvent};
-use minotari_wallet::{PauseReason, ProcessingEvent, ScanMode, ScanStatusEvent, Scanner};
+use minotari_wallet::{ProcessingEvent, ScanMode, ScanStatusEvent, Scanner};
 use std::sync::RwLock;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -99,12 +98,7 @@ impl From<ScanStatusEvent> for ScanStatusDto {
             } => ScanStatusDto::Paused {
                 account_id,
                 last_scanned_height,
-                reason: match reason {
-                    PauseReason::MaxBlocksReached { limit } => {
-                        format!("max blocks reached: {limit}")
-                    }
-                    PauseReason::Cancelled => "cancelled".to_string(),
-                },
+                reason: format!("{:?}", reason),
             },
             ScanStatusEvent::Waiting {
                 account_id,
@@ -177,93 +171,61 @@ pub async fn start_scan(sink: StreamSink<ScanEventDto>, config: ScanConfiguratio
         *guard = Some(cancel_token.clone());
     }
 
+    let mode = if config.continuous {
+        ScanMode::Continuous {
+            poll_interval: Duration::from_secs(config.poll_interval_seconds),
+        }
+    } else {
+        ScanMode::Full
+    };
+
+    let scanner_builder = Scanner::new(
+        &config.password,
+        &config.base_url,
+        &db_path,
+        config.batch_size,
+    )
+    .mode(mode)
+    .cancel_token(cancel_token.clone());
+
+    let (mut rx, scan_future) = scanner_builder.run_with_events();
+
+    let stream_sink = sink.clone();
     let loop_cancel_token = cancel_token.clone();
-    let thread_cancel_token = cancel_token.clone();
 
-    let (tx, rx) = tokio::sync::oneshot::channel::<Result<()>>();
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            let dto_opt = match event {
+                ProcessingEvent::ScanStatus(status) => Some(ScanEventDto::Status(status.into())),
+                ProcessingEvent::TransactionsReady(e) => {
+                    Some(ScanEventDto::TransactionsReady(e.into()))
+                }
+                ProcessingEvent::TransactionsUpdated(e) => {
+                    Some(ScanEventDto::TransactionsUpdated(e.into()))
+                }
+                _ => None,
+            };
 
-    // Spawn a dedicated OS thread.
-    // Reason: The `scanner` implementation uses `rusqlite` references inside async blocks.
-    // Since `rusqlite::Connection` is !Sync, these Futures become !Send.
-    // FRB's default runtime is multi-threaded and requires Send.
-    // By using a dedicated thread with a `current_thread` runtime, we satisfy the safety requirements.
-    std::thread::spawn(move || {
-        let rt_builder = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build();
-
-        let result = match rt_builder {
-            Ok(rt) => rt.block_on(async {
-                let local = tokio::task::LocalSet::new();
-                local
-                    .run_until(async {
-                        let mode = if config.continuous {
-                            ScanMode::Continuous {
-                                poll_interval: Duration::from_secs(config.poll_interval_seconds),
-                            }
-                        } else {
-                            ScanMode::Full
-                        };
-
-                        let scanner_builder = Scanner::new(
-                            &config.password,
-                            &config.base_url,
-                            &db_path,
-                            config.batch_size,
-                        )
-                        .mode(mode)
-                        .cancel_token(thread_cancel_token);
-
-                        let (mut rx, scan_future) = scanner_builder.run_with_events();
-                        let stream_sink = sink.clone();
-
-                        tokio::task::spawn_local(async move {
-                            while let Some(event) = rx.recv().await {
-                                let dto_opt = match event {
-                                    ProcessingEvent::ScanStatus(status) => {
-                                        Some(ScanEventDto::Status(status.into()))
-                                    }
-                                    ProcessingEvent::TransactionsReady(e) => {
-                                        Some(ScanEventDto::TransactionsReady(e.into()))
-                                    }
-                                    ProcessingEvent::TransactionsUpdated(e) => {
-                                        Some(ScanEventDto::TransactionsUpdated(e.into()))
-                                    }
-                                    _ => None,
-                                };
-
-                                if let Some(dto) = dto_opt {
-                                    if stream_sink.add(dto).is_err() {
-                                        loop_cancel_token.cancel();
-                                        break;
-                                    }
-                                }
-                            }
-                        });
-
-                        let res = scan_future.await;
-                        match res {
-                            Ok(_) => Ok(()),
-                            Err(e) => {
-                                let _ = sink.add(ScanEventDto::Error(e.to_string()));
-                                Err(anyhow!(e))
-                            }
-                        }
-                    })
-                    .await
-            }),
-            Err(e) => Err(anyhow!("Failed to create local runtime: {}", e)),
-        };
-
-        let _ = tx.send(result);
+            if let Some(dto) = dto_opt {
+                if stream_sink.add(dto).is_err() {
+                    loop_cancel_token.cancel();
+                    break;
+                }
+            }
+        }
     });
 
-    rx.await.map_err(|_| anyhow!("Scanner thread panicked"))??;
-
+    let result = scan_future.await;
     {
         let mut guard = SCAN_TOKEN.write().map_err(|_| anyhow!("Failed to lock"))?;
         *guard = None;
     }
 
-    Ok(())
+    match result {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let _ = sink.add(ScanEventDto::Error(e.to_string()));
+            Err(anyhow!(e))
+        }
+    }
 }

@@ -1833,7 +1833,7 @@ dependencies = [
 [[package]]
 name = "lightweight_wallet_libs"
 version = "0.2.0"
-source = "git+https://github.com/tari-project/tari-wallet?rev=3e2807b1731074b6c1c2d166ef72c9085afff5fb#3e2807b1731074b6c1c2d166ef72c9085afff5fb"
+source = "git+https://github.com/tari-project/tari-wallet?rev=b78185ae30a9ec39ca7d36c829d260493947b510#b78185ae30a9ec39ca7d36c829d260493947b510"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1983,7 +1983,7 @@ dependencies = [
 [[package]]
 name = "minotari"
 version = "0.1.0"
-source = "git+https://github.com/martinserts/minotari-cli.git?branch=rework-db-layer#48b834c9eefa22b6bc8dc76a992526811f9fc6a8"
+source = "git+https://github.com/martinserts/minotari-cli.git?branch=rework-db-layer#be056f80f9f033481def0f7741df77425a0b019a"
 dependencies = [
  "anyhow",
  "axum",
