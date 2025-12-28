@@ -1,9 +1,12 @@
+use crate::api::db::get_db_connection;
+use anyhow::{Context, Result};
 use flutter_rust_bridge::frb;
-use minotari_wallet::{get_accounts, init_db, get_balance as get_wallet_balance};
-use crate::api::db::DB_PATH;
+use minotari_wallet::{get_accounts, get_balance as get_wallet_balance};
 
+#[frb]
 #[derive(Clone, Debug)]
 pub struct AccountBalanceDto {
+    pub total: u64,
     pub unconfirmed: u64,
     pub locked: u64,
     pub available: u64,
@@ -12,6 +15,7 @@ pub struct AccountBalanceDto {
 impl From<minotari_wallet::db::AccountBalance> for AccountBalanceDto {
     fn from(b: minotari_wallet::db::AccountBalance) -> Self {
         Self {
+            total: b.total,
             unconfirmed: b.unconfirmed,
             locked: b.locked,
             available: b.available,
@@ -20,11 +24,12 @@ impl From<minotari_wallet::db::AccountBalance> for AccountBalanceDto {
 }
 
 #[frb]
-pub async fn get_balance(name: String) -> anyhow::Result<AccountBalanceDto> {
-    let db = DB_PATH.get().expect("should get db path");
-    let pool = init_db(db).await?;
-    let mut conn = pool.acquire().await?;
-    let account = &get_accounts(&mut conn, Some(&name)).await?[0];
-    let agg_result = get_wallet_balance(&mut conn, account.id).await?;
+pub fn get_balance(wallet_name: Option<String>) -> Result<AccountBalanceDto> {
+    let mut conn = get_db_connection()?;
+    let accounts = &get_accounts(&mut conn, wallet_name.as_deref())?;
+    let account = accounts
+        .first()
+        .context("No accounts found for this wallet")?;
+    let agg_result = get_wallet_balance(&mut conn, account.id)?;
     Ok(agg_result.into())
 }
