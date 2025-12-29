@@ -118,6 +118,7 @@ impl From<ScanStatusEvent> for ScanStatusDto {
     }
 }
 
+#[frb]
 #[derive(Clone)]
 pub struct TransactionsReadyDto {
     pub account_id: i64,
@@ -137,6 +138,7 @@ impl From<DisplayedTransactionsEvent> for TransactionsReadyDto {
     }
 }
 
+#[frb]
 #[derive(Clone)]
 pub struct TransactionsUpdatedDto {
     pub account_id: i64,
