@@ -61,7 +61,6 @@ pub struct SendTransactionEvent {
     pub details: String,
 }
 
-#[frb]
 #[derive(Error, Debug)]
 pub enum TransactionError {
     #[error("Invalid Recipient Address: {0}")]
