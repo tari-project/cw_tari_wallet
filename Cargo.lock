@@ -1983,7 +1983,7 @@ dependencies = [
 [[package]]
 name = "minotari"
 version = "0.1.0"
-source = "git+https://github.com/martinserts/minotari-cli.git?branch=rework-db-layer#be056f80f9f033481def0f7741df77425a0b019a"
+source = "git+https://github.com/tari-project/minotari-cli.git?rev=4286cf1bfe2d280ec09a22635d186f26e8a74aad#4286cf1bfe2d280ec09a22635d186f26e8a74aad"
 dependencies = [
  "anyhow",
  "axum",
