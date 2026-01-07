@@ -2,7 +2,7 @@ use flutter_rust_bridge::frb;
 use tari_common::configuration::Network;
 
 #[frb]
-#[derive(Clone, PartialEq, Eq, Copy)]
+#[derive(Clone, PartialEq, Eq, Copy, Debug)]
 pub enum TariNetwork {
     MainNet,
     StageNet,
