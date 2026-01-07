@@ -269,16 +269,15 @@ fn wire__crate__api__db__initialize_database_impl(
     )
 }
 fn wire__crate__api__seeds__list_words_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
             debug_name: "list_words",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
         },
         move || {
             let message = unsafe {
@@ -291,12 +290,10 @@ fn wire__crate__api__seeds__list_words_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             deserializer.end();
-            move |context| {
-                transform_result_sse::<_, ()>((move || {
-                    let output_ok = Result::<_, ()>::Ok(crate::api::seeds::list_words())?;
-                    Ok(output_ok)
-                })())
-            }
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok(crate::api::seeds::list_words())?;
+                Ok(output_ok)
+            })())
         },
     )
 }
@@ -985,7 +982,6 @@ fn pde_ffi_dispatcher_primary_impl(
             wire__crate__api__transactions__get_transactions_impl(port, ptr, rust_vec_len, data_len)
         }
         6 => wire__crate__api__db__initialize_database_impl(port, ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__seeds__list_words_impl(port, ptr, rust_vec_len, data_len),
         8 => wire__crate__api__wallet__restore_wallet_impl(port, ptr, rust_vec_len, data_len),
         9 => wire__crate__api__send_transaction__send_transaction_impl(
             port,
@@ -1007,6 +1003,7 @@ fn pde_ffi_dispatcher_sync_impl(
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
+        7 => wire__crate__api__seeds__list_words_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
