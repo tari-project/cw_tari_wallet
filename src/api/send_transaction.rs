@@ -1,5 +1,5 @@
 use crate::api::db::get_db_pool;
-use crate::api::network::parse_network;
+use crate::api::network::{parse_network, TariNetwork};
 use crate::api::transactions::DisplayedTransactionDto;
 use crate::frb_generated::StreamSink;
 use anyhow::{anyhow, Result};
@@ -31,7 +31,7 @@ const SECONDS_TO_LOCK_UTXO: u64 = 60 * 60 * 24; // 24 hrs
 pub struct SendTransactionDetails {
     pub seed_words: Vec<String>,
     pub passphrase: Option<String>,
-    pub network: Option<String>,
+    pub network: Option<TariNetwork>,
     pub base_url: Option<String>,
     pub wallet_name: Option<String>,
     pub recipient_address: String,
@@ -185,8 +185,7 @@ struct ValidatedInputs {
 }
 
 fn validate_inputs(details: &SendTransactionDetails) -> Result<ValidatedInputs> {
-    let network = parse_network(details.network.clone())
-        .map_err(|e| TransactionError::NetworkError(e.to_string()))?;
+    let network = parse_network(details.network);
 
     let recipient_address = TariAddress::from_base58(&details.recipient_address)
         .map_err(|e| TransactionError::InvalidAddress(e.to_string()))?;
