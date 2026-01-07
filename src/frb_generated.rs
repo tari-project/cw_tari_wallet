@@ -67,7 +67,8 @@ fn wire__crate__api__wallet__create_wallet_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_network = <Option<String>>::sse_decode(&mut deserializer);
+            let api_network =
+                <Option<crate::api::network::TariNetwork>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -138,7 +139,8 @@ fn wire__crate__api__address__get_address_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_wallet_name = <Option<String>>::sse_decode(&mut deserializer);
             let api_passphrase = <Option<String>>::sse_decode(&mut deserializer);
-            let api_network = <Option<String>>::sse_decode(&mut deserializer);
+            let api_network =
+                <Option<crate::api::network::TariNetwork>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -322,7 +324,8 @@ fn wire__crate__api__wallet__restore_wallet_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_seed_words = <Vec<String>>::sse_decode(&mut deserializer);
             let api_passphrase = <Option<String>>::sse_decode(&mut deserializer);
-            let api_network = <Option<String>>::sse_decode(&mut deserializer);
+            let api_network =
+                <Option<crate::api::network::TariNetwork>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -683,6 +686,17 @@ impl SseDecode for Option<crate::api::transactions::FeeInfoDto> {
     }
 }
 
+impl SseDecode for Option<crate::api::network::TariNetwork> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::network::TariNetwork>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<u64> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -813,7 +827,7 @@ impl SseDecode for crate::api::send_transaction::SendTransactionDetails {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_seedWords = <Vec<String>>::sse_decode(deserializer);
         let mut var_passphrase = <Option<String>>::sse_decode(deserializer);
-        let mut var_network = <Option<String>>::sse_decode(deserializer);
+        let mut var_network = <Option<crate::api::network::TariNetwork>>::sse_decode(deserializer);
         let mut var_baseUrl = <Option<String>>::sse_decode(deserializer);
         let mut var_walletName = <Option<String>>::sse_decode(deserializer);
         let mut var_recipientAddress = <String>::sse_decode(deserializer);
@@ -843,6 +857,22 @@ impl SseDecode for crate::api::send_transaction::SendTransactionEvent {
         return crate::api::send_transaction::SendTransactionEvent {
             stage: var_stage,
             details: var_details,
+        };
+    }
+}
+
+impl SseDecode for crate::api::network::TariNetwork {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::network::TariNetwork::MainNet,
+            1 => crate::api::network::TariNetwork::StageNet,
+            2 => crate::api::network::TariNetwork::NextNet,
+            3 => crate::api::network::TariNetwork::LocalNet,
+            4 => crate::api::network::TariNetwork::Igor,
+            5 => crate::api::network::TariNetwork::Esmeralda,
+            _ => unreachable!("Invalid variant for TariNetwork: {}", inner),
         };
     }
 }
@@ -1288,6 +1318,31 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::send_transaction::SendTransac
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::network::TariNetwork {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::MainNet => 0.into_dart(),
+            Self::StageNet => 1.into_dart(),
+            Self::NextNet => 2.into_dart(),
+            Self::LocalNet => 3.into_dart(),
+            Self::Igor => 4.into_dart(),
+            Self::Esmeralda => 5.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::network::TariNetwork
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::network::TariNetwork>
+    for crate::api::network::TariNetwork
+{
+    fn into_into_dart(self) -> crate::api::network::TariNetwork {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::send_transaction::TransactionStage {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
@@ -1554,6 +1609,16 @@ impl SseEncode for Option<crate::api::transactions::FeeInfoDto> {
     }
 }
 
+impl SseEncode for Option<crate::api::network::TariNetwork> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::network::TariNetwork>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<u64> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1672,7 +1737,7 @@ impl SseEncode for crate::api::send_transaction::SendTransactionDetails {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<String>>::sse_encode(self.seed_words, serializer);
         <Option<String>>::sse_encode(self.passphrase, serializer);
-        <Option<String>>::sse_encode(self.network, serializer);
+        <Option<crate::api::network::TariNetwork>>::sse_encode(self.network, serializer);
         <Option<String>>::sse_encode(self.base_url, serializer);
         <Option<String>>::sse_encode(self.wallet_name, serializer);
         <String>::sse_encode(self.recipient_address, serializer);
@@ -1687,6 +1752,26 @@ impl SseEncode for crate::api::send_transaction::SendTransactionEvent {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <crate::api::send_transaction::TransactionStage>::sse_encode(self.stage, serializer);
         <String>::sse_encode(self.details, serializer);
+    }
+}
+
+impl SseEncode for crate::api::network::TariNetwork {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::network::TariNetwork::MainNet => 0,
+                crate::api::network::TariNetwork::StageNet => 1,
+                crate::api::network::TariNetwork::NextNet => 2,
+                crate::api::network::TariNetwork::LocalNet => 3,
+                crate::api::network::TariNetwork::Igor => 4,
+                crate::api::network::TariNetwork::Esmeralda => 5,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
     }
 }
 

@@ -1,4 +1,7 @@
-use crate::api::{db::get_db_connection, network::parse_network};
+use crate::api::{
+    db::get_db_connection,
+    network::{parse_network, TariNetwork},
+};
 use anyhow::{Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::get_accounts;
@@ -7,9 +10,9 @@ use minotari_wallet::get_accounts;
 pub fn get_address(
     wallet_name: Option<String>,
     passphrase: Option<String>,
-    network: Option<String>,
+    network: Option<TariNetwork>,
 ) -> Result<String> {
-    let network = parse_network(network)?;
+    let network = parse_network(network);
     let mut conn = get_db_connection()?;
     let accounts = &get_accounts(&mut conn, wallet_name.as_deref())?;
     let account = accounts

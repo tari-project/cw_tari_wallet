@@ -1,5 +1,5 @@
 use crate::api::db::get_db_path;
-use crate::api::network::parse_network;
+use crate::api::network::{parse_network, TariNetwork};
 use anyhow::{anyhow, Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::init_with_view_key;
@@ -24,8 +24,8 @@ pub struct WalletCreationDetails {
 }
 
 #[frb]
-pub fn create_wallet(network: Option<String>) -> Result<WalletCreationDetails> {
-    let network = parse_network(network)?;
+pub fn create_wallet(network: Option<TariNetwork>) -> Result<WalletCreationDetails> {
+    let network = parse_network(network);
     let seed = CipherSeed::random();
 
     let details = generate_details_from_seed(seed, network)?;
@@ -38,9 +38,9 @@ pub fn create_wallet(network: Option<String>) -> Result<WalletCreationDetails> {
 pub fn restore_wallet(
     seed_words: Vec<String>,
     passphrase: Option<String>,
-    network: Option<String>,
+    network: Option<TariNetwork>,
 ) -> Result<WalletCreationDetails> {
-    let network = parse_network(network)?;
+    let network = parse_network(network);
     let mnemonic = SeedWords::from_str(&seed_words.join(" ")).context("Invalid seed words")?;
     let password = passphrase
         .map(|p| SafePassword::from_str(&p))
