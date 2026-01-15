@@ -69,7 +69,7 @@ fn wire__crate__api__wallet__create_wallet_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_network =
                 <Option<crate::api::network::TariNetwork>>::sse_decode(&mut deserializer);
-            let api_password = <Option<String>>::sse_decode(&mut deserializer);
+            let api_password = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -216,7 +216,7 @@ fn wire__crate__api__wallet__get_seed_words_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_password = <Option<String>>::sse_decode(&mut deserializer);
+            let api_password = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -393,7 +393,7 @@ fn wire__crate__api__wallet__restore_wallet_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_seed_words = <Vec<String>>::sse_decode(&mut deserializer);
-            let api_password = <Option<String>>::sse_decode(&mut deserializer);
+            let api_password = <String>::sse_decode(&mut deserializer);
             let api_network =
                 <Option<crate::api::network::TariNetwork>>::sse_decode(&mut deserializer);
             deserializer.end();

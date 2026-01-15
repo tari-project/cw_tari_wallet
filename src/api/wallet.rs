@@ -15,7 +15,6 @@ use tari_transaction_components::key_manager::wallet_types::{SeedWordsWallet, Wa
 use tari_transaction_components::key_manager::{KeyManager, TransactionKeyManagerInterface};
 use tari_utilities::hex::Hex;
 use tari_utilities::hidden::Hidden;
-use tari_utilities::SafePassword;
 
 #[frb]
 pub struct WalletCreationDetails {
@@ -29,16 +28,15 @@ pub struct WalletCreationDetails {
 #[frb]
 pub fn create_wallet(
     network: Option<TariNetwork>,
-    password: Option<String>,
+    password: String,
 ) -> Result<WalletCreationDetails> {
     let network = parse_network(network);
     let seed = CipherSeed::random();
     let db_path = get_db_path()?;
-    let password_str = password.unwrap_or_default();
 
     let details = generate_details_from_seed(&seed, network)?;
 
-    init_with_seed_words(seed, &password_str, &db_path, None).context("Failed to init wallet")?;
+    init_with_seed_words(seed, &password, &db_path, None).context("Failed to init wallet")?;
 
     Ok(details)
 }
@@ -46,40 +44,31 @@ pub fn create_wallet(
 #[frb]
 pub fn restore_wallet(
     seed_words: Vec<String>,
-    password: Option<String>,
+    password: String,
     network: Option<TariNetwork>,
 ) -> Result<WalletCreationDetails> {
     let network = parse_network(network);
     let mnemonic = SeedWords::from_str(&seed_words.join(" ")).context("Invalid seed words")?;
-    let password_str = password.clone().unwrap_or_default();
-
-    let safe_password = password
-        .map(|p| SafePassword::from_str(&p))
-        .transpose()
-        .map_err(|_| anyhow!("Invalid password"))?;
-
-    let seed =
-        CipherSeed::from_mnemonic(&mnemonic, safe_password).context("Invalid cipher seed")?;
+    let seed = CipherSeed::from_mnemonic(&mnemonic, None).context("Invalid cipher seed")?;
     let db_path = get_db_path()?;
 
     let details = generate_details_from_seed(&seed, network)?;
 
-    init_with_seed_words(seed, &password_str, &db_path, None).context("Failed to init wallet")?;
+    init_with_seed_words(seed, &password, &db_path, None).context("Failed to init wallet")?;
 
     Ok(details)
 }
 
 #[frb]
-pub fn get_seed_words(password: Option<String>) -> Result<Vec<String>> {
+pub fn get_seed_words(password: String) -> Result<Vec<String>> {
     let mut conn = get_db_connection()?;
     let accounts = get_accounts(&mut conn, None)?;
     let account = accounts
         .first()
         .context("No accounts found for this wallet")?;
 
-    let password_str = password.unwrap_or_default();
     let seed_words_obj = account
-        .get_seed_words(&password_str)?
+        .get_seed_words(&password)?
         .ok_or_else(|| anyhow!("Account does not have seed words"))?;
 
     Ok(split_hidden_words(seed_words_obj.join(" ")))
