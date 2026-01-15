@@ -23,6 +23,7 @@ thiserror = "2.0.17"
 tokio = { version = "1.47.1", features = ["full"] }
 tokio-util = { version = "0.7.17", features = ["rt"] }
 uuid = "1.19.0"
+zeroize = "1"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
