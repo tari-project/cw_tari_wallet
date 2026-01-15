@@ -73,7 +73,10 @@ pub fn restore_wallet(
     Ok(details)
 }
 
-pub fn get_seed_words(password: String) -> Result<Vec<String>> {
+#[frb]
+pub fn get_seed_words(password: String) -> Result<SensitiveSeeds> {
+    let password = Zeroizing::new(password);
+
     let conn = get_db_connection()?;
     let accounts = get_accounts(&conn, None)?;
     let account = accounts
@@ -84,7 +87,10 @@ pub fn get_seed_words(password: String) -> Result<Vec<String>> {
         .get_seed_words(&password)?
         .ok_or_else(|| anyhow!("Account does not have seed words"))?;
 
-    Ok(split_hidden_words(seed_words_obj.join(" ")))
+    let hidden_joined = Hidden::from(seed_words_obj.join(" "));
+    let raw_words = split_hidden_words(hidden_joined);
+
+    Ok(SensitiveSeeds { words: raw_words })
 }
 
 #[frb]
