@@ -1,5 +1,6 @@
 pub mod address;
 pub mod balance;
+pub mod base_node;
 pub mod db;
 pub mod network;
 pub mod scanner;

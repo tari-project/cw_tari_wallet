@@ -10,7 +10,7 @@ crate-type = ["cdylib", "staticlib"]
 anyhow = "1.0.100"
 chrono = "0.4.42"
 flutter_rust_bridge = "=2.11.1"
-minotari-wallet = { package = "minotari", git = "https://github.com/tari-project/minotari-cli.git", rev = "4286cf1bfe2d280ec09a22635d186f26e8a74aad" }
+minotari-wallet = { package = "minotari", git = "https://github.com/tari-project/minotari-cli.git", rev = "b831d747060ccc2efc19c3c232e9046130c566f2" }
 once_cell = "1.21.3"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.31.0"

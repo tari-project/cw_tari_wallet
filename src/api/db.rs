@@ -2,14 +2,14 @@ use anyhow::{anyhow, Context, Result};
 use flutter_rust_bridge::frb;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use std::sync::RwLock;
+use std::{path::PathBuf, sync::RwLock};
 
 use minotari_wallet::init_db;
 
 #[frb(ignore)]
 struct DatabaseState {
     pub pool: Pool<SqliteConnectionManager>,
-    pub path: String,
+    pub path: PathBuf,
 }
 
 static DB_STATE: RwLock<Option<DatabaseState>> = RwLock::new(None);
@@ -18,7 +18,9 @@ static DB_STATE: RwLock<Option<DatabaseState>> = RwLock::new(None);
 pub fn initialize_database(path: String) -> Result<()> {
     println!("initializing database {}", path);
 
-    let pool = init_db(&path).context("Failed to create database pool")?;
+    let path = PathBuf::from(path);
+
+    let pool = init_db(path.clone()).context("Failed to create database pool")?;
 
     let mut guard = DB_STATE
         .write()
@@ -53,7 +55,7 @@ pub(crate) fn get_db_connection() -> Result<PooledConnection<SqliteConnectionMan
         .context("Failed to retrieve connection from pool")
 }
 
-pub(crate) fn get_db_path() -> Result<String> {
+pub(crate) fn get_db_path() -> Result<PathBuf> {
     let guard = DB_STATE
         .read()
         .map_err(|_| anyhow!("Failed to lock DB_STATE for reading"))?;
