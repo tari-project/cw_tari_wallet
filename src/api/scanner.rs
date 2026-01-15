@@ -184,7 +184,7 @@ pub async fn start_scan(sink: StreamSink<ScanEventDto>, config: ScanConfiguratio
     let scanner_builder = Scanner::new(
         &config.password,
         &config.base_url,
-        &db_path,
+        db_path,
         config.batch_size,
     )
     .mode(mode)

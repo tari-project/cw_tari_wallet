@@ -2,7 +2,7 @@ use crate::api::db::get_db_connection;
 use anyhow::{Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::{
-    db::get_displayed_transactions_paginated, get_accounts, utils::format_timestamp,
+    db::get_displayed_transactions_paginated, get_accounts, utils::timestamp::format_timestamp,
 };
 
 #[frb]
@@ -59,11 +59,75 @@ impl From<minotari_wallet::transactions::CounterpartyInfo> for CounterpartyInfoD
 
 #[frb]
 #[derive(Clone)]
+pub enum DisplayedTransactionDirection {
+    Incoming,
+    Outgoing,
+}
+
+impl From<minotari_wallet::transactions::TransactionDirection> for DisplayedTransactionDirection {
+    fn from(d: minotari_wallet::transactions::TransactionDirection) -> Self {
+        match d {
+            minotari_wallet::transactions::TransactionDirection::Incoming => Self::Incoming,
+            minotari_wallet::transactions::TransactionDirection::Outgoing => Self::Outgoing,
+        }
+    }
+}
+
+#[frb]
+#[derive(Clone)]
+pub enum DisplayedTransactionSource {
+    Transfer,
+    Coinbase,
+    OneSided,
+    Unknown,
+}
+
+impl From<minotari_wallet::transactions::TransactionSource> for DisplayedTransactionSource {
+    fn from(s: minotari_wallet::transactions::TransactionSource) -> Self {
+        match s {
+            minotari_wallet::transactions::TransactionSource::Transfer => Self::Transfer,
+            minotari_wallet::transactions::TransactionSource::Coinbase => Self::Coinbase,
+            minotari_wallet::transactions::TransactionSource::OneSided => Self::OneSided,
+            minotari_wallet::transactions::TransactionSource::Unknown => Self::Unknown,
+        }
+    }
+}
+
+#[frb]
+#[derive(Clone)]
+pub enum DisplayedTransactionStatus {
+    Pending,
+    Unconfirmed,
+    Confirmed,
+    Cancelled,
+    Reorganized,
+    Rejected,
+}
+
+impl From<minotari_wallet::transactions::TransactionDisplayStatus> for DisplayedTransactionStatus {
+    fn from(s: minotari_wallet::transactions::TransactionDisplayStatus) -> Self {
+        match s {
+            minotari_wallet::transactions::TransactionDisplayStatus::Pending => Self::Pending,
+            minotari_wallet::transactions::TransactionDisplayStatus::Unconfirmed => {
+                Self::Unconfirmed
+            }
+            minotari_wallet::transactions::TransactionDisplayStatus::Confirmed => Self::Confirmed,
+            minotari_wallet::transactions::TransactionDisplayStatus::Cancelled => Self::Cancelled,
+            minotari_wallet::transactions::TransactionDisplayStatus::Reorganized => {
+                Self::Reorganized
+            }
+            minotari_wallet::transactions::TransactionDisplayStatus::Rejected => Self::Rejected,
+        }
+    }
+}
+
+#[frb]
+#[derive(Clone)]
 pub struct DisplayedTransactionDto {
     pub id: String,
-    pub direction: String,
-    pub source: String,
-    pub status: String,
+    pub direction: DisplayedTransactionDirection,
+    pub source: DisplayedTransactionSource,
+    pub status: DisplayedTransactionStatus,
     pub amount: u64,
     pub amount_display: String,
     pub message: Option<String>,
@@ -76,9 +140,9 @@ impl From<minotari_wallet::DisplayedTransaction> for DisplayedTransactionDto {
     fn from(t: minotari_wallet::DisplayedTransaction) -> Self {
         Self {
             id: t.id,
-            direction: t.direction.as_label().to_string(),
-            source: t.source.as_label().to_string(),
-            status: t.status.as_label().to_string(),
+            direction: t.direction.into(),
+            source: t.source.into(),
+            status: t.status.into(),
             amount: t.amount,
             amount_display: t.amount_display,
             message: t.message,
