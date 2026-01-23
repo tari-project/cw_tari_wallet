@@ -18,7 +18,6 @@ use tari_transaction_components::key_manager::KeyManager;
 use tari_transaction_components::offline_signing::models::PrepareOneSidedTransactionForSigningResult;
 use tari_transaction_components::offline_signing::sign_locked_transaction;
 use tari_transaction_components::MicroMinotari;
-use tari_utilities::SafePassword;
 use thiserror::Error;
 
 const DEFAULT_BASE_URL: &str = "https://rpc.tari.com";
@@ -138,7 +137,7 @@ pub async fn send_transaction(
     .await?;
 
     let signed_transaction = {
-        let key_manager = derive_key_manager(&details.seed_words, details.passphrase.as_deref())?;
+        let key_manager = derive_key_manager(&details.seed_words)?;
 
         report_status(
             &sink,
@@ -250,17 +249,12 @@ fn build_unsigned_transaction(
     Ok(tx)
 }
 
-fn derive_key_manager(seed_words: &[String], passphrase: Option<&str>) -> Result<KeyManager> {
+fn derive_key_manager(seed_words: &[String]) -> Result<KeyManager> {
     let seed_str = seed_words.join(" ");
     let mnemonic = SeedWords::from_str(&seed_str)
         .map_err(|e| TransactionError::InvalidSeedWords(e.to_string()))?;
 
-    let safe_password = passphrase
-        .map(SafePassword::from_str)
-        .transpose()
-        .map_err(|_| TransactionError::InvalidPassphrase)?;
-
-    let seed = CipherSeed::from_mnemonic(&mnemonic, safe_password)
+    let seed = CipherSeed::from_mnemonic(&mnemonic, None)
         .map_err(|e| TransactionError::InvalidSeedWords(format!("Cipher Seed error: {}", e)))?;
 
     let wallet_type = WalletType::SeedWords(SeedWordsWallet::construct_new(seed).map_err(|e| {
