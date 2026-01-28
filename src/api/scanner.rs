@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::scan::{DisplayedTransactionsEvent, TransactionsUpdatedEvent};
 use minotari_wallet::{ProcessingEvent, ScanMode, ScanStatusEvent, Scanner};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
@@ -23,7 +23,7 @@ pub fn stop_scan() -> Result<()> {
 }
 
 #[frb]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum ScanEventDto {
     Status(ScanStatusDto),
     TransactionsReady(TransactionsReadyDto),
@@ -32,7 +32,7 @@ pub enum ScanEventDto {
 }
 
 #[frb]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum ScanStatusDto {
     Started {
         account_id: i64,
@@ -119,7 +119,7 @@ impl From<ScanStatusEvent> for ScanStatusDto {
 }
 
 #[frb]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TransactionsReadyDto {
     pub account_id: i64,
     pub transactions: Vec<DisplayedTransactionDto>,
@@ -139,7 +139,7 @@ impl From<DisplayedTransactionsEvent> for TransactionsReadyDto {
 }
 
 #[frb]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TransactionsUpdatedDto {
     pub account_id: i64,
     pub updated_transactions: Vec<DisplayedTransactionDto>,
@@ -156,15 +156,18 @@ impl From<TransactionsUpdatedEvent> for TransactionsUpdatedDto {
 
 #[frb]
 pub struct ScanConfiguration {
-    pub password: String,
+    pub passphrase: String,
     pub base_url: String,
     pub batch_size: u64,
     pub continuous: bool,
     pub poll_interval_seconds: u64,
 }
 
-#[frb]
-pub async fn start_scan(sink: StreamSink<ScanEventDto>, config: ScanConfiguration) -> Result<()> {
+#[frb(ignore)]
+pub async fn start_scan_with_handler<F>(config: ScanConfiguration, event_callback: F) -> Result<()>
+where
+    F: Fn(ScanEventDto) -> Result<()> + Send + Sync + 'static,
+{
     let db_path = get_db_path()?;
 
     let cancel_token = CancellationToken::new();
@@ -182,7 +185,7 @@ pub async fn start_scan(sink: StreamSink<ScanEventDto>, config: ScanConfiguratio
     };
 
     let scanner_builder = Scanner::new(
-        &config.password,
+        &config.passphrase,
         &config.base_url,
         db_path,
         config.batch_size,
@@ -192,8 +195,10 @@ pub async fn start_scan(sink: StreamSink<ScanEventDto>, config: ScanConfiguratio
 
     let (mut rx, scan_future) = scanner_builder.run_with_events();
 
-    let stream_sink = sink.clone();
     let loop_cancel_token = cancel_token.clone();
+
+    let event_callback = Arc::new(event_callback);
+    let callback_for_spawn = event_callback.clone();
 
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
@@ -209,7 +214,7 @@ pub async fn start_scan(sink: StreamSink<ScanEventDto>, config: ScanConfiguratio
             };
 
             if let Some(dto) = dto_opt {
-                if stream_sink.add(dto).is_err() {
+                if callback_for_spawn(dto).is_err() {
                     loop_cancel_token.cancel();
                     break;
                 }
@@ -226,8 +231,20 @@ pub async fn start_scan(sink: StreamSink<ScanEventDto>, config: ScanConfiguratio
     match result {
         Ok(_) => Ok(()),
         Err(e) => {
-            let _ = sink.add(ScanEventDto::Error(e.to_string()));
+            let _ = event_callback(ScanEventDto::Error(e.to_string()));
             Err(anyhow!(e))
         }
     }
+}
+
+#[frb]
+pub async fn start_scan(sink: StreamSink<ScanEventDto>, config: ScanConfiguration) -> Result<()> {
+    let stream_sink = sink.clone();
+
+    start_scan_with_handler(config, move |event| {
+        stream_sink
+            .add(event)
+            .map_err(|e| anyhow!("Sink error: {:?}", e))
+    })
+    .await
 }
