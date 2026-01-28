@@ -35,9 +35,9 @@ pub struct WalletCreationDetails {
 #[frb]
 pub fn create_wallet(
     network: Option<TariNetwork>,
-    password: String,
+    passphrase: String,
 ) -> Result<WalletCreationDetails> {
-    let password = Zeroizing::new(password);
+    let password = Zeroizing::new(passphrase);
 
     let network = parse_network(network);
     let seed = CipherSeed::random();
@@ -53,10 +53,10 @@ pub fn create_wallet(
 #[frb]
 pub fn restore_wallet(
     seed_words: Vec<String>,
-    password: String,
+    passphrase: String,
     network: Option<TariNetwork>,
 ) -> Result<WalletCreationDetails> {
-    let password = Zeroizing::new(password);
+    let password = Zeroizing::new(passphrase);
     let seed_words = Zeroizing::new(seed_words);
 
     let network = parse_network(network);

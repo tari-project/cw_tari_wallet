@@ -4,20 +4,20 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 anyhow = "1.0.100"
 chrono = "0.4.42"
 flutter_rust_bridge = "=2.11.1"
-minotari-wallet = { package = "minotari", git = "https://github.com/tari-project/minotari-cli.git", rev = "b831d747060ccc2efc19c3c232e9046130c566f2" }
+minotari-wallet = { package = "minotari", git = "https://github.com/tari-project/minotari-cli.git", rev = "9128858277857635cf2c9f1aab7f1b6e90fda272" }
 once_cell = "1.21.3"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.31.0"
-tari_common = { git = "https://github.com/tari-project/tari.git", rev = "32b2e748cc1800823aebfa1d32799d2d9fee3bf5" }
-tari_common_types = { git = "https://github.com/tari-project/tari.git", rev = "32b2e748cc1800823aebfa1d32799d2d9fee3bf5" }
+tari_common = { git = "https://github.com/tari-project/tari.git", rev = "766f80ccc20596413ee208311750c11e02a2841d" }
+tari_common_types = { git = "https://github.com/tari-project/tari.git", rev = "766f80ccc20596413ee208311750c11e02a2841d" }
 tari_crypto = "0.22.1"
-tari_transaction_components = { git = "https://github.com/tari-project/tari.git", rev = "32b2e748cc1800823aebfa1d32799d2d9fee3bf5" }
+tari_transaction_components = { git = "https://github.com/tari-project/tari.git", rev = "766f80ccc20596413ee208311750c11e02a2841d" }
 tari_utilities = "0.8.0"
 thiserror = "2.0.17"
 tokio = { version = "1.47.1", features = ["full"] }

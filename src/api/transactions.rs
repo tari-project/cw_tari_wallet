@@ -6,7 +6,7 @@ use minotari_wallet::{
 };
 
 #[frb]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct FeeInfoDto {
     pub amount: u64,
     pub amount_display: String,
@@ -22,7 +22,7 @@ impl From<minotari_wallet::transactions::FeeInfo> for FeeInfoDto {
 }
 
 #[frb]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct BlockchainInfoDto {
     pub block_height: u64,
     pub timestamp: String,
@@ -40,7 +40,7 @@ impl From<minotari_wallet::transactions::BlockchainInfo> for BlockchainInfoDto {
 }
 
 #[frb]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CounterpartyInfoDto {
     pub address: String,
     pub address_emoji: Option<String>,
@@ -58,7 +58,7 @@ impl From<minotari_wallet::transactions::CounterpartyInfo> for CounterpartyInfoD
 }
 
 #[frb]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum DisplayedTransactionDirection {
     Incoming,
     Outgoing,
@@ -74,7 +74,7 @@ impl From<minotari_wallet::transactions::TransactionDirection> for DisplayedTran
 }
 
 #[frb]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum DisplayedTransactionSource {
     Transfer,
     Coinbase,
@@ -94,7 +94,7 @@ impl From<minotari_wallet::transactions::TransactionSource> for DisplayedTransac
 }
 
 #[frb]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum DisplayedTransactionStatus {
     Pending,
     Unconfirmed,
@@ -122,7 +122,7 @@ impl From<minotari_wallet::transactions::TransactionDisplayStatus> for Displayed
 }
 
 #[frb]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DisplayedTransactionDto {
     pub id: String,
     pub direction: DisplayedTransactionDirection,
@@ -134,6 +134,7 @@ pub struct DisplayedTransactionDto {
     pub counterparty: Option<CounterpartyInfoDto>,
     pub blockchain: BlockchainInfoDto,
     pub fee: Option<FeeInfoDto>,
+    pub payrefs: Vec<String>,
 }
 
 impl From<minotari_wallet::DisplayedTransaction> for DisplayedTransactionDto {
@@ -149,6 +150,12 @@ impl From<minotari_wallet::DisplayedTransaction> for DisplayedTransactionDto {
             counterparty: t.counterparty.map(CounterpartyInfoDto::from),
             blockchain: t.blockchain.into(),
             fee: t.fee.map(FeeInfoDto::from),
+            payrefs: t
+                .details
+                .sent_payrefs
+                .iter()
+                .map(|fixed_hash| fixed_hash.to_string())
+                .collect(),
         }
     }
 }

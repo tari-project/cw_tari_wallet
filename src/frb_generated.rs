@@ -652,13 +652,13 @@ fn wire__crate__api__wallet__create_wallet_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_network =
                 <Option<crate::api::network::TariNetwork>>::sse_decode(&mut deserializer);
-            let api_password = <String>::sse_decode(&mut deserializer);
+            let api_passphrase = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
                         let output_ok =
-                            crate::api::wallet::create_wallet(api_network, api_password)?;
+                            crate::api::wallet::create_wallet(api_network, api_passphrase)?;
                         Ok(output_ok)
                     })(),
                 )
@@ -976,7 +976,7 @@ fn wire__crate__api__wallet__restore_wallet_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_seed_words = <Vec<String>>::sse_decode(&mut deserializer);
-            let api_password = <String>::sse_decode(&mut deserializer);
+            let api_passphrase = <String>::sse_decode(&mut deserializer);
             let api_network =
                 <Option<crate::api::network::TariNetwork>>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -985,7 +985,7 @@ fn wire__crate__api__wallet__restore_wallet_impl(
                     (move || {
                         let output_ok = crate::api::wallet::restore_wallet(
                             api_seed_words,
-                            api_password,
+                            api_passphrase,
                             api_network,
                         )?;
                         Ok(output_ok)
@@ -1345,6 +1345,7 @@ impl SseDecode for crate::api::transactions::DisplayedTransactionDto {
         let mut var_blockchain =
             <crate::api::transactions::BlockchainInfoDto>::sse_decode(deserializer);
         let mut var_fee = <Option<crate::api::transactions::FeeInfoDto>>::sse_decode(deserializer);
+        let mut var_payrefs = <Vec<String>>::sse_decode(deserializer);
         return crate::api::transactions::DisplayedTransactionDto {
             id: var_id,
             direction: var_direction,
@@ -1356,6 +1357,7 @@ impl SseDecode for crate::api::transactions::DisplayedTransactionDto {
             counterparty: var_counterparty,
             blockchain: var_blockchain,
             fee: var_fee,
+            payrefs: var_payrefs,
         };
     }
 }
@@ -1527,13 +1529,13 @@ impl SseDecode for Option<u64> {
 impl SseDecode for crate::api::scanner::ScanConfiguration {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut var_password = <String>::sse_decode(deserializer);
+        let mut var_passphrase = <String>::sse_decode(deserializer);
         let mut var_baseUrl = <String>::sse_decode(deserializer);
         let mut var_batchSize = <u64>::sse_decode(deserializer);
         let mut var_continuous = <bool>::sse_decode(deserializer);
         let mut var_pollIntervalSeconds = <u64>::sse_decode(deserializer);
         return crate::api::scanner::ScanConfiguration {
-            password: var_password,
+            passphrase: var_passphrase,
             base_url: var_baseUrl,
             batch_size: var_batchSize,
             continuous: var_continuous,
@@ -1992,6 +1994,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::transactions::DisplayedTransa
             self.counterparty.into_into_dart().into_dart(),
             self.blockchain.into_into_dart().into_dart(),
             self.fee.into_into_dart().into_dart(),
+            self.payrefs.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -2080,7 +2083,7 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::transactions::FeeInfoDto>
 impl flutter_rust_bridge::IntoDart for crate::api::scanner::ScanConfiguration {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
-            self.password.into_into_dart().into_dart(),
+            self.passphrase.into_into_dart().into_dart(),
             self.base_url.into_into_dart().into_dart(),
             self.batch_size.into_into_dart().into_dart(),
             self.continuous.into_into_dart().into_dart(),
@@ -2534,6 +2537,7 @@ impl SseEncode for crate::api::transactions::DisplayedTransactionDto {
         );
         <crate::api::transactions::BlockchainInfoDto>::sse_encode(self.blockchain, serializer);
         <Option<crate::api::transactions::FeeInfoDto>>::sse_encode(self.fee, serializer);
+        <Vec<String>>::sse_encode(self.payrefs, serializer);
     }
 }
 
@@ -2690,7 +2694,7 @@ impl SseEncode for Option<u64> {
 impl SseEncode for crate::api::scanner::ScanConfiguration {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <String>::sse_encode(self.password, serializer);
+        <String>::sse_encode(self.passphrase, serializer);
         <String>::sse_encode(self.base_url, serializer);
         <u64>::sse_encode(self.batch_size, serializer);
         <bool>::sse_encode(self.continuous, serializer);

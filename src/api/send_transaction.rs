@@ -87,41 +87,37 @@ pub enum TransactionError {
     Aborted,
 }
 
-#[frb]
-pub async fn send_transaction(
-    sink: StreamSink<SendTransactionEvent>,
+#[frb(ignore)]
+pub async fn send_transaction_with_handler<F>(
     details: SendTransactionDetails,
-) -> Result<DisplayedTransactionDto> {
-    report_status(
-        &sink,
-        TransactionStage::Initializing,
-        "Starting workflow...",
-    )
-    .await?;
+    status_callback: F,
+) -> Result<DisplayedTransactionDto>
+where
+    F: Fn(SendTransactionEvent) + Send + Sync + 'static,
+{
+    let report = |stage: TransactionStage, msg: &str| {
+        status_callback(SendTransactionEvent {
+            stage,
+            details: msg.to_string(),
+        });
+    };
 
-    report_status(
-        &sink,
-        TransactionStage::ValidatingInput,
-        "Parsing inputs...",
-    )
-    .await?;
+    report(TransactionStage::Initializing, "Starting workflow...");
+
+    report(TransactionStage::ValidatingInput, "Parsing inputs...");
     let validated = validate_inputs(&details)?;
 
-    report_status(
-        &sink,
+    report(
         TransactionStage::ConnectingToNetwork,
         "Accessing wallet database...",
-    )
-    .await?;
+    );
     let mut sender =
         create_transaction_sender(&details, validated.network, validated.confirmations)?;
 
-    report_status(
-        &sink,
+    report(
         TransactionStage::ConstructingTransaction,
         "Building transaction UTXOs...",
-    )
-    .await?;
+    );
     let unsigned_tx = build_unsigned_transaction(
         &mut sender,
         validated.recipient_address,
@@ -129,22 +125,18 @@ pub async fn send_transaction(
         details.payment_id,
     )?;
 
-    report_status(
-        &sink,
+    report(
         TransactionStage::SigningKeyGeneration,
         "Deriving keys from seed...",
-    )
-    .await?;
+    );
 
     let signed_transaction = {
         let key_manager = derive_key_manager(&details.seed_words)?;
 
-        report_status(
-            &sink,
+        report(
             TransactionStage::SigningTransaction,
             "Signing transaction...",
-        )
-        .await?;
+        );
 
         let consensus_constants = ConsensusConstantsBuilder::new(validated.network).build();
 
@@ -157,12 +149,7 @@ pub async fn send_transaction(
         .map_err(|e| TransactionError::SigningError(e.to_string()))?
     };
 
-    report_status(
-        &sink,
-        TransactionStage::Broadcasting,
-        "Broadcasting to network...",
-    )
-    .await?;
+    report(TransactionStage::Broadcasting, "Broadcasting to network...");
 
     let base_url = details.base_url.unwrap_or(DEFAULT_BASE_URL.to_string());
 
@@ -171,9 +158,24 @@ pub async fn send_transaction(
         .await
         .map_err(|e| TransactionError::NetworkError(e.to_string()))?;
 
-    report_status(&sink, TransactionStage::Completed, "Transaction sent").await?;
+    report(TransactionStage::Completed, "Transaction sent");
 
     Ok(result_tx.into())
+}
+
+#[frb]
+pub async fn send_transaction(
+    sink: StreamSink<SendTransactionEvent>,
+    details: SendTransactionDetails,
+) -> Result<DisplayedTransactionDto> {
+    let stream_sink = sink.clone();
+
+    send_transaction_with_handler(details, move |event| {
+        // We ignore errors here because if the sink is closed,
+        // we likely still want the transaction to finish processing if possible,
+        let _ = stream_sink.add(event);
+    })
+    .await
 }
 
 struct ValidatedInputs {
@@ -263,16 +265,4 @@ fn derive_key_manager(seed_words: &[String]) -> Result<KeyManager> {
 
     KeyManager::new(wallet_type)
         .map_err(|e| TransactionError::WalletError(format!("Key Manager failed: {}", e)).into())
-}
-
-async fn report_status(
-    sink: &StreamSink<SendTransactionEvent>,
-    stage: TransactionStage,
-    details: &str,
-) -> Result<()> {
-    sink.add(SendTransactionEvent {
-        stage,
-        details: details.to_string(),
-    })
-    .map_err(|_| TransactionError::Aborted.into())
 }
