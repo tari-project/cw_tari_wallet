@@ -5,6 +5,7 @@ use crate::api::{
 use anyhow::{Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::get_accounts;
+use tari_common::network_check::set_network_if_choice_valid;
 
 #[frb]
 pub fn get_address(
@@ -13,6 +14,7 @@ pub fn get_address(
     network: Option<TariNetwork>,
 ) -> Result<String> {
     let network = parse_network(network);
+    set_network_if_choice_valid(network)?;
     let mut conn = get_db_connection()?;
     let accounts = &get_accounts(&mut conn, wallet_name.as_deref())?;
     let account = accounts

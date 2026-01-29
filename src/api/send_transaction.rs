@@ -1,6 +1,7 @@
 use crate::api::db::get_db_pool;
 use crate::api::network::{parse_network, TariNetwork};
 use crate::api::transactions::DisplayedTransactionDto;
+use crate::api::DEFAULT_WALLET_NAME;
 use crate::frb_generated::StreamSink;
 use anyhow::{anyhow, Result};
 use flutter_rust_bridge::frb;
@@ -8,6 +9,7 @@ use minotari_wallet::transactions::manager::TransactionSender;
 use minotari_wallet::transactions::one_sided_transaction::Recipient;
 use std::str::FromStr;
 use tari_common::configuration::Network;
+use tari_common::network_check::set_network_if_choice_valid;
 use tari_common_types::seeds::cipher_seed::CipherSeed;
 use tari_common_types::seeds::mnemonic::Mnemonic;
 use tari_common_types::seeds::seed_words::SeedWords;
@@ -22,7 +24,6 @@ use thiserror::Error;
 
 const DEFAULT_BASE_URL: &str = "https://rpc.tari.com";
 const DEFAULT_PASSPHRASE: &str = "";
-const DEFAULT_WALLET_NAME: &str = "default";
 const DEFAULT_CONFIRMATION_WINDOW: u64 = 3;
 const SECONDS_TO_LOCK_UTXO: u64 = 60 * 60 * 24; // 24 hrs
 
@@ -106,6 +107,8 @@ where
 
     report(TransactionStage::ValidatingInput, "Parsing inputs...");
     let validated = validate_inputs(&details)?;
+
+    set_network_if_choice_valid(validated.network)?;
 
     report(
         TransactionStage::ConnectingToNetwork,

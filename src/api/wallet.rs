@@ -1,11 +1,14 @@
 use crate::api::db::{get_db_connection, get_db_path};
 use crate::api::network::{parse_network, TariNetwork};
+use crate::api::DEFAULT_WALLET_NAME;
 use anyhow::{anyhow, Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::db::get_accounts;
+use minotari_wallet::utils::delete_wallet::delete_wallet as lib_delete_wallet;
 use minotari_wallet::utils::init_wallet::init_with_seed_words;
 use std::str::FromStr;
 use tari_common::configuration::Network;
+use tari_common::network_check::set_network_if_choice_valid;
 use tari_common_types::seeds::cipher_seed::CipherSeed;
 use tari_common_types::seeds::mnemonic::{Mnemonic, MnemonicLanguage};
 use tari_common_types::seeds::seed_words::SeedWords;
@@ -40,6 +43,7 @@ pub fn create_wallet(
     let password = Zeroizing::new(passphrase);
 
     let network = parse_network(network);
+    set_network_if_choice_valid(network)?;
     let seed = CipherSeed::random();
     let db_path = get_db_path()?;
 
@@ -60,6 +64,7 @@ pub fn restore_wallet(
     let seed_words = Zeroizing::new(seed_words);
 
     let network = parse_network(network);
+    set_network_if_choice_valid(network)?;
 
     let mnemonic_string = Zeroizing::new(seed_words.join(" "));
     let mnemonic = SeedWords::from_str(&mnemonic_string).context("Invalid seed words")?;
@@ -142,4 +147,14 @@ fn split_hidden_words(hidden: Hidden<String>) -> Vec<String> {
         .split_whitespace()
         .map(|s| s.to_string())
         .collect()
+}
+
+#[frb]
+pub fn delete_wallet(wallet_name: Option<String>) -> Result<()> {
+    let path = get_db_path()?;
+    let account_name = wallet_name.as_deref().unwrap_or(DEFAULT_WALLET_NAME);
+
+    lib_delete_wallet(&path, account_name).context("Failed to delete wallet account")?;
+
+    Ok(())
 }
