@@ -3,6 +3,7 @@ use crate::api::network::{parse_network, TariNetwork};
 use anyhow::{anyhow, Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::db::get_accounts;
+use minotari_wallet::utils::delete_wallet::delete_wallet as lib_delete_wallet;
 use minotari_wallet::utils::init_wallet::init_with_seed_words;
 use std::str::FromStr;
 use tari_common::configuration::Network;
@@ -145,4 +146,14 @@ fn split_hidden_words(hidden: Hidden<String>) -> Vec<String> {
         .split_whitespace()
         .map(|s| s.to_string())
         .collect()
+}
+
+#[frb]
+pub fn delete_wallet(wallet_name: Option<String>) -> Result<()> {
+    let path = get_db_path()?;
+    let account_name = wallet_name.as_deref().unwrap_or("default");
+
+    lib_delete_wallet(&path, account_name).context("Failed to delete wallet account")?;
+
+    Ok(())
 }

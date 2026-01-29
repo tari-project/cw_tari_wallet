@@ -2,6 +2,7 @@ pub mod address;
 pub mod balance;
 pub mod base_node;
 pub mod db;
+pub mod fee;
 pub mod network;
 pub mod scanner;
 pub mod seeds;
