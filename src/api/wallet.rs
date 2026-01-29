@@ -6,6 +6,7 @@ use minotari_wallet::db::get_accounts;
 use minotari_wallet::utils::init_wallet::init_with_seed_words;
 use std::str::FromStr;
 use tari_common::configuration::Network;
+use tari_common::network_check::set_network_if_choice_valid;
 use tari_common_types::seeds::cipher_seed::CipherSeed;
 use tari_common_types::seeds::mnemonic::{Mnemonic, MnemonicLanguage};
 use tari_common_types::seeds::seed_words::SeedWords;
@@ -40,6 +41,7 @@ pub fn create_wallet(
     let password = Zeroizing::new(passphrase);
 
     let network = parse_network(network);
+    set_network_if_choice_valid(network)?;
     let seed = CipherSeed::random();
     let db_path = get_db_path()?;
 
@@ -60,6 +62,7 @@ pub fn restore_wallet(
     let seed_words = Zeroizing::new(seed_words);
 
     let network = parse_network(network);
+    set_network_if_choice_valid(network)?;
 
     let mnemonic_string = Zeroizing::new(seed_words.join(" "));
     let mnemonic = SeedWords::from_str(&mnemonic_string).context("Invalid seed words")?;

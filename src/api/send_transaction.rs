@@ -8,6 +8,7 @@ use minotari_wallet::transactions::manager::TransactionSender;
 use minotari_wallet::transactions::one_sided_transaction::Recipient;
 use std::str::FromStr;
 use tari_common::configuration::Network;
+use tari_common::network_check::set_network_if_choice_valid;
 use tari_common_types::seeds::cipher_seed::CipherSeed;
 use tari_common_types::seeds::mnemonic::Mnemonic;
 use tari_common_types::seeds::seed_words::SeedWords;
@@ -106,6 +107,8 @@ where
 
     report(TransactionStage::ValidatingInput, "Parsing inputs...");
     let validated = validate_inputs(&details)?;
+
+    set_network_if_choice_valid(validated.network)?;
 
     report(
         TransactionStage::ConnectingToNetwork,
