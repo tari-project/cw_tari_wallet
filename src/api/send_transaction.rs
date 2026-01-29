@@ -1,6 +1,7 @@
 use crate::api::db::get_db_pool;
 use crate::api::network::{parse_network, TariNetwork};
 use crate::api::transactions::DisplayedTransactionDto;
+use crate::api::DEFAULT_WALLET_NAME;
 use crate::frb_generated::StreamSink;
 use anyhow::{anyhow, Result};
 use flutter_rust_bridge::frb;
@@ -23,7 +24,6 @@ use thiserror::Error;
 
 const DEFAULT_BASE_URL: &str = "https://rpc.tari.com";
 const DEFAULT_PASSPHRASE: &str = "";
-const DEFAULT_WALLET_NAME: &str = "default";
 const DEFAULT_CONFIRMATION_WINDOW: u64 = 3;
 const SECONDS_TO_LOCK_UTXO: u64 = 60 * 60 * 24; // 24 hrs
 

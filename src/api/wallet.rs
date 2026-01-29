@@ -1,5 +1,6 @@
 use crate::api::db::{get_db_connection, get_db_path};
 use crate::api::network::{parse_network, TariNetwork};
+use crate::api::DEFAULT_WALLET_NAME;
 use anyhow::{anyhow, Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::db::get_accounts;
@@ -151,7 +152,7 @@ fn split_hidden_words(hidden: Hidden<String>) -> Vec<String> {
 #[frb]
 pub fn delete_wallet(wallet_name: Option<String>) -> Result<()> {
     let path = get_db_path()?;
-    let account_name = wallet_name.as_deref().unwrap_or("default");
+    let account_name = wallet_name.as_deref().unwrap_or(DEFAULT_WALLET_NAME);
 
     lib_delete_wallet(&path, account_name).context("Failed to delete wallet account")?;
 
