@@ -7,6 +7,8 @@ use std::fmt::Write;
 use std::io::LineWriter;
 use std::path::PathBuf;
 
+const BYTES_PER_MB: u64 = 1_048_576;
+
 #[frb]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
@@ -94,7 +96,7 @@ pub fn init_logger(base_path: String, config: Option<LoggerConfig>) -> Result<()
     let file_rotator = FileRotate::new(
         log_file_path,
         AppendCount::new(config.max_files),
-        file_rotate::ContentLimit::Bytes((config.max_file_size_mb * 1024 * 1024) as usize),
+        file_rotate::ContentLimit::Bytes((config.max_file_size_mb * BYTES_PER_MB) as usize),
         Compression::None,
         #[cfg(unix)]
         None,
