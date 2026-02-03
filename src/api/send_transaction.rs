@@ -1,7 +1,6 @@
 use crate::api::db::get_db_pool;
 use crate::api::network::{parse_network, TariNetwork};
 use crate::api::transactions::DisplayedTransactionDto;
-use crate::api::DEFAULT_WALLET_NAME;
 use crate::frb_generated::StreamSink;
 use anyhow::{anyhow, Result};
 use flutter_rust_bridge::frb;
@@ -33,7 +32,7 @@ pub struct SendTransactionDetails {
     pub passphrase: Option<String>,
     pub network: Option<TariNetwork>,
     pub base_url: Option<String>,
-    pub wallet_name: Option<String>,
+    pub wallet_name: String,
     pub recipient_address: String,
     pub amount: u64,
     pub payment_id: Option<String>,
@@ -222,13 +221,14 @@ fn create_transaction_sender(
         .clone()
         .unwrap_or(DEFAULT_PASSPHRASE.to_string());
 
-    let wallet_name = details
-        .wallet_name
-        .clone()
-        .unwrap_or(DEFAULT_WALLET_NAME.to_string());
-
-    TransactionSender::new(db_pool, wallet_name, password, network, confirmations)
-        .map_err(|e| TransactionError::WalletError(e.to_string()).into())
+    TransactionSender::new(
+        db_pool,
+        details.wallet_name.clone(),
+        password,
+        network,
+        confirmations,
+    )
+    .map_err(|e| TransactionError::WalletError(e.to_string()).into())
 }
 
 fn build_unsigned_transaction(

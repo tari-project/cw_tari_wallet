@@ -1,6 +1,5 @@
 use crate::api::db::{get_db_connection, get_db_path};
 use crate::api::network::{parse_network, TariNetwork};
-use crate::api::DEFAULT_WALLET_NAME;
 use anyhow::{anyhow, Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::db::get_accounts;
@@ -37,6 +36,7 @@ pub struct WalletCreationDetails {
 
 #[frb]
 pub fn create_wallet(
+    wallet_name: String,
     network: Option<TariNetwork>,
     passphrase: String,
 ) -> Result<WalletCreationDetails> {
@@ -49,13 +49,15 @@ pub fn create_wallet(
 
     let details = generate_details_from_seed(&seed, network)?;
 
-    init_with_seed_words(seed, &password, &db_path, None).context("Failed to init wallet")?;
+    init_with_seed_words(seed, &password, &db_path, Some(&wallet_name))
+        .context("Failed to init wallet")?;
 
     Ok(details)
 }
 
 #[frb]
 pub fn restore_wallet(
+    wallet_name: String,
     seed_words: Vec<String>,
     passphrase: String,
     network: Option<TariNetwork>,
@@ -73,7 +75,8 @@ pub fn restore_wallet(
 
     let details = generate_details_from_seed(&seed, network)?;
 
-    init_with_seed_words(seed, &password, &db_path, None).context("Failed to init wallet")?;
+    init_with_seed_words(seed, &password, &db_path, Some(&wallet_name))
+        .context("Failed to init wallet")?;
 
     Ok(details)
 }
@@ -150,11 +153,21 @@ fn split_hidden_words(hidden: Hidden<String>) -> Vec<String> {
 }
 
 #[frb]
-pub fn delete_wallet(wallet_name: Option<String>) -> Result<()> {
+pub fn delete_wallet(wallet_name: String) -> Result<()> {
     let path = get_db_path()?;
-    let account_name = wallet_name.as_deref().unwrap_or(DEFAULT_WALLET_NAME);
 
-    lib_delete_wallet(&path, account_name).context("Failed to delete wallet account")?;
+    lib_delete_wallet(&path, &wallet_name).context("Failed to delete wallet account")?;
 
     Ok(())
+}
+
+#[frb]
+pub fn list_wallets() -> Result<Vec<String>> {
+    let mut conn = get_db_connection()?;
+    let accounts = get_accounts(&mut conn, None)
+        .context("Failed to retrieve wallet accounts from database")?;
+
+    let names = accounts.into_iter().map(|a| a.friendly_name).collect();
+
+    Ok(names)
 }

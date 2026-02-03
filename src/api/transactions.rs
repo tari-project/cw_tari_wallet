@@ -162,12 +162,12 @@ impl From<minotari_wallet::DisplayedTransaction> for DisplayedTransactionDto {
 
 #[frb]
 pub fn get_transactions(
-    wallet_name: Option<String>,
+    wallet_name: String,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<DisplayedTransactionDto>> {
     let mut conn = get_db_connection()?;
-    let accounts = &get_accounts(&mut conn, wallet_name.as_deref())?;
+    let accounts = &get_accounts(&mut conn, Some(&wallet_name))?;
     let account = accounts
         .first()
         .context("No accounts found for this wallet")?;

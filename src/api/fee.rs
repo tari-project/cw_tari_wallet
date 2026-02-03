@@ -1,4 +1,4 @@
-use crate::api::{db::get_db_pool, DEFAULT_WALLET_NAME};
+use crate::api::db::get_db_pool;
 use anyhow::{anyhow, Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::transactions::fee_estimator::{FeeEstimator, FeePriority as LibFeePriority};
@@ -39,20 +39,19 @@ pub async fn estimate_transaction_fee(
     amount: u64,
     priority: FeePriority,
     base_url: String,
-    wallet_name: Option<String>,
+    wallet_name: String,
 ) -> Result<FeeEstimate> {
     let pool = get_db_pool()?;
 
     let estimator = FeeEstimator::new(pool, base_url);
 
     let amount_micro = MicroMinotari(amount);
-    let account_name = wallet_name.as_deref().unwrap_or(DEFAULT_WALLET_NAME);
 
     let estimated_output_size = None;
 
     let estimates = estimator
         .estimate_fees(
-            account_name,
+            &wallet_name,
             amount_micro,
             DEFAULT_NUM_OUTPUTS,
             DEFAULT_CONFIRMATION_WINDOW,
