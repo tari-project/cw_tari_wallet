@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1470114071;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1230829411;
 
 // Section: executor
 
@@ -973,6 +973,40 @@ fn wire__crate__api__transactions__get_transactions_impl(
         },
     )
 }
+fn wire__crate__api__logger__init_logger_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "init_logger",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_base_path = <String>::sse_decode(&mut deserializer);
+            let api_config =
+                <Option<crate::api::logger::LoggerConfig>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                (move || {
+                    let output_ok = crate::api::logger::init_logger(api_base_path, api_config)?;
+                    Ok(output_ok)
+                })(),
+            )
+        },
+    )
+}
 fn wire__crate__api__db__initialize_database_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1068,6 +1102,39 @@ fn wire__crate__api__seeds__list_words_impl(
                 let output_ok = Result::<_, ()>::Ok(crate::api::seeds::list_words())?;
                 Ok(output_ok)
             })())
+        },
+    )
+}
+fn wire__crate__api__logger__logger_config_default_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "logger_config_default",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok =
+                        Result::<_, ()>::Ok(crate::api::logger::LoggerConfig::default())?;
+                    Ok(output_ok)
+                })())
+            }
         },
     )
 }
@@ -1593,6 +1660,20 @@ impl SseDecode for Vec<crate::api::transactions::DisplayedTransactionDto> {
     }
 }
 
+impl SseDecode for Vec<crate::api::logger::LogModuleConfig> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = vec![];
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::logger::LogModuleConfig>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1602,6 +1683,51 @@ impl SseDecode for Vec<u8> {
             ans_.push(<u8>::sse_decode(deserializer));
         }
         return ans_;
+    }
+}
+
+impl SseDecode for crate::api::logger::LogLevel {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::logger::LogLevel::Error,
+            1 => crate::api::logger::LogLevel::Warn,
+            2 => crate::api::logger::LogLevel::Info,
+            3 => crate::api::logger::LogLevel::Debug,
+            4 => crate::api::logger::LogLevel::Trace,
+            5 => crate::api::logger::LogLevel::Off,
+            _ => unreachable!("Invalid variant for LogLevel: {}", inner),
+        };
+    }
+}
+
+impl SseDecode for crate::api::logger::LogModuleConfig {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_target = <String>::sse_decode(deserializer);
+        let mut var_level = <crate::api::logger::LogLevel>::sse_decode(deserializer);
+        return crate::api::logger::LogModuleConfig {
+            target: var_target,
+            level: var_level,
+        };
+    }
+}
+
+impl SseDecode for crate::api::logger::LoggerConfig {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_defaultLevel = <crate::api::logger::LogLevel>::sse_decode(deserializer);
+        let mut var_moduleLevels =
+            <Vec<crate::api::logger::LogModuleConfig>>::sse_decode(deserializer);
+        let mut var_maxFileSizeMb = <u64>::sse_decode(deserializer);
+        let mut var_maxFiles = <usize>::sse_decode(deserializer);
+        return crate::api::logger::LoggerConfig {
+            default_level: var_defaultLevel,
+            module_levels: var_moduleLevels,
+            max_file_size_mb: var_maxFileSizeMb,
+            max_files: var_maxFiles,
+        };
     }
 }
 
@@ -1636,6 +1762,17 @@ impl SseDecode for Option<crate::api::transactions::FeeInfoDto> {
             return Some(<crate::api::transactions::FeeInfoDto>::sse_decode(
                 deserializer,
             ));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<crate::api::logger::LoggerConfig> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::logger::LoggerConfig>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -1970,18 +2107,21 @@ fn pde_ffi_dispatcher_primary_impl(
         21 => {
             wire__crate__api__transactions__get_transactions_impl(port, ptr, rust_vec_len, data_len)
         }
-        22 => wire__crate__api__db__initialize_database_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__wallet__list_wallets_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__wallet__restore_wallet_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__wallet__reveal_seed_words_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__send_transaction__send_transaction_impl(
+        23 => wire__crate__api__db__initialize_database_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__wallet__list_wallets_impl(port, ptr, rust_vec_len, data_len),
+        26 => {
+            wire__crate__api__logger__logger_config_default_impl(port, ptr, rust_vec_len, data_len)
+        }
+        27 => wire__crate__api__wallet__restore_wallet_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__wallet__reveal_seed_words_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__send_transaction__send_transaction_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        28 => wire__crate__api__scanner__start_scan_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__scanner__stop_scan_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__scanner__start_scan_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__scanner__stop_scan_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2006,7 +2146,8 @@ fn pde_ffi_dispatcher_sync_impl(
 10 => wire__crate__api__wallet__WalletCreationDetails_auto_accessor_set_tari_address_impl(ptr, rust_vec_len, data_len),
 11 => wire__crate__api__wallet__WalletCreationDetails_auto_accessor_set_view_private_key_hex_impl(ptr, rust_vec_len, data_len),
 12 => wire__crate__api__wallet__WalletCreationDetails_auto_accessor_set_wallet_birthday_impl(ptr, rust_vec_len, data_len),
-24 => wire__crate__api__seeds__list_words_impl(ptr, rust_vec_len, data_len),
+22 => wire__crate__api__logger__init_logger_impl(ptr, rust_vec_len, data_len),
+25 => wire__crate__api__seeds__list_words_impl(ptr, rust_vec_len, data_len),
                         _ => unreachable!(),
                     }
 }
@@ -2271,6 +2412,72 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::fee::FeePriority>
     for crate::api::fee::FeePriority
 {
     fn into_into_dart(self) -> crate::api::fee::FeePriority {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::logger::LogLevel {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Error => 0.into_dart(),
+            Self::Warn => 1.into_dart(),
+            Self::Info => 2.into_dart(),
+            Self::Debug => 3.into_dart(),
+            Self::Trace => 4.into_dart(),
+            Self::Off => 5.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::logger::LogLevel {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::logger::LogLevel>
+    for crate::api::logger::LogLevel
+{
+    fn into_into_dart(self) -> crate::api::logger::LogLevel {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::logger::LogModuleConfig {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.target.into_into_dart().into_dart(),
+            self.level.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::logger::LogModuleConfig
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::logger::LogModuleConfig>
+    for crate::api::logger::LogModuleConfig
+{
+    fn into_into_dart(self) -> crate::api::logger::LogModuleConfig {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::logger::LoggerConfig {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.default_level.into_into_dart().into_dart(),
+            self.module_levels.into_into_dart().into_dart(),
+            self.max_file_size_mb.into_into_dart().into_dart(),
+            self.max_files.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::logger::LoggerConfig
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::logger::LoggerConfig>
+    for crate::api::logger::LoggerConfig
+{
+    fn into_into_dart(self) -> crate::api::logger::LoggerConfig {
         self
     }
 }
@@ -2844,6 +3051,16 @@ impl SseEncode for Vec<crate::api::transactions::DisplayedTransactionDto> {
     }
 }
 
+impl SseEncode for Vec<crate::api::logger::LogModuleConfig> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::logger::LogModuleConfig>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -2851,6 +3068,44 @@ impl SseEncode for Vec<u8> {
         for item in self {
             <u8>::sse_encode(item, serializer);
         }
+    }
+}
+
+impl SseEncode for crate::api::logger::LogLevel {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::logger::LogLevel::Error => 0,
+                crate::api::logger::LogLevel::Warn => 1,
+                crate::api::logger::LogLevel::Info => 2,
+                crate::api::logger::LogLevel::Debug => 3,
+                crate::api::logger::LogLevel::Trace => 4,
+                crate::api::logger::LogLevel::Off => 5,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
+impl SseEncode for crate::api::logger::LogModuleConfig {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.target, serializer);
+        <crate::api::logger::LogLevel>::sse_encode(self.level, serializer);
+    }
+}
+
+impl SseEncode for crate::api::logger::LoggerConfig {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <crate::api::logger::LogLevel>::sse_encode(self.default_level, serializer);
+        <Vec<crate::api::logger::LogModuleConfig>>::sse_encode(self.module_levels, serializer);
+        <u64>::sse_encode(self.max_file_size_mb, serializer);
+        <usize>::sse_encode(self.max_files, serializer);
     }
 }
 
@@ -2880,6 +3135,16 @@ impl SseEncode for Option<crate::api::transactions::FeeInfoDto> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <crate::api::transactions::FeeInfoDto>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<crate::api::logger::LoggerConfig> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::logger::LoggerConfig>::sse_encode(value, serializer);
         }
     }
 }

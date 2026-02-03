@@ -81,7 +81,7 @@ impl<'a, 'kvs> VisitSource<'kvs> for KvTextVisitor<'a> {
     }
 }
 
-#[frb]
+#[frb(sync)]
 pub fn init_logger(base_path: String, config: Option<LoggerConfig>) -> Result<()> {
     let config = config.unwrap_or_default();
 
