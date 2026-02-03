@@ -156,6 +156,7 @@ impl From<TransactionsUpdatedEvent> for TransactionsUpdatedDto {
 
 #[frb]
 pub struct ScanConfiguration {
+    pub wallet_name: String,
     pub passphrase: String,
     pub base_url: String,
     pub batch_size: u64,
@@ -191,6 +192,7 @@ where
         config.batch_size,
     )
     .mode(mode)
+    .account(&config.wallet_name.clone())
     .cancel_token(cancel_token.clone());
 
     let (mut rx, scan_future) = scanner_builder.run_with_events();

@@ -24,9 +24,9 @@ impl From<minotari_wallet::db::AccountBalance> for AccountBalanceDto {
 }
 
 #[frb]
-pub fn get_balance(wallet_name: Option<String>) -> Result<AccountBalanceDto> {
+pub fn get_balance(wallet_name: String) -> Result<AccountBalanceDto> {
     let mut conn = get_db_connection()?;
-    let accounts = &get_accounts(&mut conn, wallet_name.as_deref())?;
+    let accounts = &get_accounts(&mut conn, Some(&wallet_name))?;
     let account = accounts
         .first()
         .context("No accounts found for this wallet")?;
