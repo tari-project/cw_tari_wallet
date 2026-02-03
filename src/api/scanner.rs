@@ -192,7 +192,7 @@ where
         config.batch_size,
     )
     .mode(mode)
-    .account(&config.wallet_name.clone())
+    .account(&config.wallet_name)
     .cancel_token(cancel_token.clone());
 
     let (mut rx, scan_future) = scanner_builder.run_with_events();
