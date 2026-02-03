@@ -3,6 +3,7 @@ use file_rotate::{compression::Compression, suffix::AppendCount, FileRotate};
 use flutter_rust_bridge::frb;
 use log::kv::{Error, Key, Value, VisitSource};
 use log::LevelFilter;
+use std::fmt::Write;
 use std::io::LineWriter;
 use std::path::PathBuf;
 
@@ -76,7 +77,6 @@ struct KvTextVisitor<'a> {
 
 impl<'a, 'kvs> VisitSource<'kvs> for KvTextVisitor<'a> {
     fn visit_pair(&mut self, key: Key<'kvs>, value: Value<'kvs>) -> Result<(), Error> {
-        use std::fmt::Write;
         write!(self.out, " {}={}", key, value).map_err(|_| Error::msg("fmt error"))
     }
 }
@@ -109,7 +109,6 @@ pub fn init_logger(base_path: String, config: Option<LoggerConfig>) -> Result<()
             };
 
             if let Err(e) = record.key_values().visit(&mut visitor) {
-                use std::fmt::Write;
                 let _ = write!(kv_output, " [KV Error: {}]", e);
             }
 
