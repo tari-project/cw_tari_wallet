@@ -131,22 +131,20 @@ pub fn init_logger(base_path: String, config: Option<LoggerConfig>) -> Result<()
     }
 
     if let Err(e) = dispatch.apply() {
-        println!(
+        return Err(anyhow::anyhow!(
             "Logger could not be initialized: {}. Logs will go to the existing logger.",
             e
-        );
-    } else {
-        let prev_hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            log::error!(
-                "RUST PANIC: {}\nBacktrace:\n{}",
-                info,
-                std::backtrace::Backtrace::capture()
-            );
-            prev_hook(info);
-        }));
-        log::info!("Minotari Logger Initialized");
+        ));
     }
-
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!(
+            "RUST PANIC: {}\nBacktrace:\n{}",
+            info,
+            std::backtrace::Backtrace::capture()
+        );
+        prev_hook(info);
+    }));
+    log::info!("Minotari Logger Initialized");
     Ok(())
 }
