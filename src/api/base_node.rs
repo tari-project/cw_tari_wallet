@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use flutter_rust_bridge::frb;
-use minotari_wallet::http::{ChainMetadata, WalletHttpClient};
+use minotari_wallet::http::WalletHttpClient;
+use tari_common_types::chain_metadata::ChainMetadata;
+use tari_utilities::hex::Hex;
 
 #[frb]
 #[derive(Clone, Debug)]
@@ -14,7 +16,7 @@ pub struct TipInfo {
     ///
     /// This uniquely identifies the current chain tip and can be used
     /// to detect chain reorganizations.
-    pub best_block_hash: Vec<u8>,
+    pub best_block_hash: String,
 
     /// The pruning horizon in blocks.
     ///
@@ -27,12 +29,6 @@ pub struct TipInfo {
     /// Block data below this height may not be fully available.
     pub pruned_height: u64,
 
-    /// The total accumulated proof-of-work difficulty.
-    ///
-    /// This represents the cumulative mining difficulty of all blocks
-    /// in the chain and is used for chain selection.
-    pub accumulated_difficulty: u64,
-
     /// The timestamp of the best block, in seconds since Unix epoch.
     pub timestamp: u64,
 }
@@ -40,12 +36,11 @@ pub struct TipInfo {
 impl From<ChainMetadata> for TipInfo {
     fn from(m: ChainMetadata) -> Self {
         Self {
-            best_block_height: m.best_block_height,
-            best_block_hash: m.best_block_hash,
-            pruning_horizon: m.pruning_horizon,
-            pruned_height: m.pruned_height,
-            accumulated_difficulty: m.accumulated_difficulty,
-            timestamp: m.timestamp,
+            best_block_height: m.best_block_height(),
+            best_block_hash: m.best_block_hash().to_hex(),
+            pruning_horizon: m.pruning_horizon(),
+            pruned_height: m.pruned_height(),
+            timestamp: m.timestamp(),
         }
     }
 }

@@ -9,4 +9,5 @@ pub mod scanner;
 pub mod seeds;
 pub mod send_transaction;
 pub mod transactions;
+pub mod utils;
 pub mod wallet;

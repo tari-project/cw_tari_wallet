@@ -1,10 +1,9 @@
-use crate::api::db::get_db_connection;
+use crate::api::{db::get_db_connection, utils::format_micro_tari};
 use anyhow::{Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::{
     db::get_displayed_transactions_paginated, get_accounts, utils::timestamp::format_timestamp,
 };
-
 #[frb]
 #[derive(Debug, Clone)]
 pub struct FeeInfoDto {
@@ -15,8 +14,8 @@ pub struct FeeInfoDto {
 impl From<minotari_wallet::transactions::FeeInfo> for FeeInfoDto {
     fn from(f: minotari_wallet::transactions::FeeInfo) -> Self {
         Self {
-            amount: f.amount,
-            amount_display: f.amount_display,
+            amount: f.amount.0,
+            amount_display: format_micro_tari(f.amount.0),
         }
     }
 }
@@ -43,16 +42,14 @@ impl From<minotari_wallet::transactions::BlockchainInfo> for BlockchainInfoDto {
 #[derive(Debug, Clone)]
 pub struct CounterpartyInfoDto {
     pub address: String,
-    pub address_emoji: Option<String>,
-    pub label: Option<String>,
+    pub address_emoji: String,
 }
 
-impl From<minotari_wallet::transactions::CounterpartyInfo> for CounterpartyInfoDto {
-    fn from(i: minotari_wallet::transactions::CounterpartyInfo) -> Self {
+impl From<tari_common_types::tari_address::TariAddress> for CounterpartyInfoDto {
+    fn from(addr: tari_common_types::tari_address::TariAddress) -> Self {
         Self {
-            address: i.address,
-            address_emoji: i.address_emoji,
-            label: i.label,
+            address: addr.to_base58(),
+            address_emoji: addr.to_emoji_string(),
         }
     }
 }
@@ -140,12 +137,12 @@ pub struct DisplayedTransactionDto {
 impl From<minotari_wallet::DisplayedTransaction> for DisplayedTransactionDto {
     fn from(t: minotari_wallet::DisplayedTransaction) -> Self {
         Self {
-            id: t.id,
+            id: t.id.to_string(),
             direction: t.direction.into(),
             source: t.source.into(),
             status: t.status.into(),
-            amount: t.amount,
-            amount_display: t.amount_display,
+            amount: t.amount.0,
+            amount_display: format_micro_tari(t.amount.0),
             message: t.message,
             counterparty: t.counterparty.map(CounterpartyInfoDto::from),
             blockchain: t.blockchain.into(),

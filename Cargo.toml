@@ -13,7 +13,7 @@ fern = "0.7.1"
 file-rotate = "0.8.0"
 flutter_rust_bridge = "=2.11.1"
 log = { version = "0.4.29", features = ["kv"] }
-minotari-wallet = { package = "minotari", git = "https://github.com/tari-project/minotari-cli.git", rev = "aaa6ae428f35c99d642970dec0c02d6538de7dc1" }
+minotari-wallet = { package = "minotari", git = "https://github.com/tari-project/minotari-cli.git", rev = "4d39146583f2751a9c3676d44e6bc29458aa41f6" }
 once_cell = "1.21.3"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.31.0"

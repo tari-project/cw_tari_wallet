@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1230829411;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1259605301;
 
 // Section: executor
 
@@ -784,6 +784,40 @@ fn wire__crate__api__fee__estimate_transaction_fee_impl(
         },
     )
 }
+fn wire__crate__api__utils__format_micro_tari_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "format_micro_tari",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_micro_tari = <u64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok =
+                        Result::<_, ()>::Ok(crate::api::utils::format_micro_tari(api_micro_tari))?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__address__get_address_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1489,12 +1523,10 @@ impl SseDecode for crate::api::transactions::CounterpartyInfoDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_address = <String>::sse_decode(deserializer);
-        let mut var_addressEmoji = <Option<String>>::sse_decode(deserializer);
-        let mut var_label = <Option<String>>::sse_decode(deserializer);
+        let mut var_addressEmoji = <String>::sse_decode(deserializer);
         return crate::api::transactions::CounterpartyInfoDto {
             address: var_address,
             address_emoji: var_addressEmoji,
-            label: var_label,
         };
     }
 }
@@ -1821,6 +1853,7 @@ impl SseDecode for crate::api::scanner::ScanConfiguration {
         let mut var_batchSize = <u64>::sse_decode(deserializer);
         let mut var_continuous = <bool>::sse_decode(deserializer);
         let mut var_pollIntervalSeconds = <u64>::sse_decode(deserializer);
+        let mut var_requiredConfirmations = <u64>::sse_decode(deserializer);
         return crate::api::scanner::ScanConfiguration {
             wallet_name: var_walletName,
             passphrase: var_passphrase,
@@ -1828,6 +1861,7 @@ impl SseDecode for crate::api::scanner::ScanConfiguration {
             batch_size: var_batchSize,
             continuous: var_continuous,
             poll_interval_seconds: var_pollIntervalSeconds,
+            required_confirmations: var_requiredConfirmations,
         };
     }
 }
@@ -1987,17 +2021,15 @@ impl SseDecode for crate::api::base_node::TipInfo {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_bestBlockHeight = <u64>::sse_decode(deserializer);
-        let mut var_bestBlockHash = <Vec<u8>>::sse_decode(deserializer);
+        let mut var_bestBlockHash = <String>::sse_decode(deserializer);
         let mut var_pruningHorizon = <u64>::sse_decode(deserializer);
         let mut var_prunedHeight = <u64>::sse_decode(deserializer);
-        let mut var_accumulatedDifficulty = <u64>::sse_decode(deserializer);
         let mut var_timestamp = <u64>::sse_decode(deserializer);
         return crate::api::base_node::TipInfo {
             best_block_height: var_bestBlockHeight,
             best_block_hash: var_bestBlockHash,
             pruning_horizon: var_pruningHorizon,
             pruned_height: var_prunedHeight,
-            accumulated_difficulty: var_accumulatedDifficulty,
             timestamp: var_timestamp,
         };
     }
@@ -2100,28 +2132,29 @@ fn pde_ffi_dispatcher_primary_impl(
         16 => {
             wire__crate__api__fee__estimate_transaction_fee_impl(port, ptr, rust_vec_len, data_len)
         }
-        17 => wire__crate__api__address__get_address_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__balance__get_balance_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__wallet__get_seed_words_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__base_node__get_tip_info_impl(port, ptr, rust_vec_len, data_len),
-        21 => {
+        17 => wire__crate__api__utils__format_micro_tari_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__address__get_address_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__balance__get_balance_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__wallet__get_seed_words_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__base_node__get_tip_info_impl(port, ptr, rust_vec_len, data_len),
+        22 => {
             wire__crate__api__transactions__get_transactions_impl(port, ptr, rust_vec_len, data_len)
         }
-        23 => wire__crate__api__db__initialize_database_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__wallet__list_wallets_impl(port, ptr, rust_vec_len, data_len),
-        26 => {
+        24 => wire__crate__api__db__initialize_database_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__wallet__list_wallets_impl(port, ptr, rust_vec_len, data_len),
+        27 => {
             wire__crate__api__logger__logger_config_default_impl(port, ptr, rust_vec_len, data_len)
         }
-        27 => wire__crate__api__wallet__restore_wallet_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__wallet__reveal_seed_words_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__send_transaction__send_transaction_impl(
+        28 => wire__crate__api__wallet__restore_wallet_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__wallet__reveal_seed_words_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__send_transaction__send_transaction_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        30 => wire__crate__api__scanner__start_scan_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__scanner__stop_scan_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__scanner__start_scan_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__scanner__stop_scan_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2146,8 +2179,8 @@ fn pde_ffi_dispatcher_sync_impl(
 10 => wire__crate__api__wallet__WalletCreationDetails_auto_accessor_set_tari_address_impl(ptr, rust_vec_len, data_len),
 11 => wire__crate__api__wallet__WalletCreationDetails_auto_accessor_set_view_private_key_hex_impl(ptr, rust_vec_len, data_len),
 12 => wire__crate__api__wallet__WalletCreationDetails_auto_accessor_set_wallet_birthday_impl(ptr, rust_vec_len, data_len),
-22 => wire__crate__api__logger__init_logger_impl(ptr, rust_vec_len, data_len),
-25 => wire__crate__api__seeds__list_words_impl(ptr, rust_vec_len, data_len),
+23 => wire__crate__api__logger__init_logger_impl(ptr, rust_vec_len, data_len),
+26 => wire__crate__api__seeds__list_words_impl(ptr, rust_vec_len, data_len),
                         _ => unreachable!(),
                     }
 }
@@ -2240,7 +2273,6 @@ impl flutter_rust_bridge::IntoDart for crate::api::transactions::CounterpartyInf
         [
             self.address.into_into_dart().into_dart(),
             self.address_emoji.into_into_dart().into_dart(),
-            self.label.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -2491,6 +2523,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::scanner::ScanConfiguration {
             self.batch_size.into_into_dart().into_dart(),
             self.continuous.into_into_dart().into_dart(),
             self.poll_interval_seconds.into_into_dart().into_dart(),
+            self.required_confirmations.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -2702,7 +2735,6 @@ impl flutter_rust_bridge::IntoDart for crate::api::base_node::TipInfo {
             self.best_block_hash.into_into_dart().into_dart(),
             self.pruning_horizon.into_into_dart().into_dart(),
             self.pruned_height.into_into_dart().into_dart(),
-            self.accumulated_difficulty.into_into_dart().into_dart(),
             self.timestamp.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -2900,8 +2932,7 @@ impl SseEncode for crate::api::transactions::CounterpartyInfoDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.address, serializer);
-        <Option<String>>::sse_encode(self.address_emoji, serializer);
-        <Option<String>>::sse_encode(self.label, serializer);
+        <String>::sse_encode(self.address_emoji, serializer);
     }
 }
 
@@ -3188,6 +3219,7 @@ impl SseEncode for crate::api::scanner::ScanConfiguration {
         <u64>::sse_encode(self.batch_size, serializer);
         <bool>::sse_encode(self.continuous, serializer);
         <u64>::sse_encode(self.poll_interval_seconds, serializer);
+        <u64>::sse_encode(self.required_confirmations, serializer);
     }
 }
 
@@ -3330,10 +3362,9 @@ impl SseEncode for crate::api::base_node::TipInfo {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <u64>::sse_encode(self.best_block_height, serializer);
-        <Vec<u8>>::sse_encode(self.best_block_hash, serializer);
+        <String>::sse_encode(self.best_block_hash, serializer);
         <u64>::sse_encode(self.pruning_horizon, serializer);
         <u64>::sse_encode(self.pruned_height, serializer);
-        <u64>::sse_encode(self.accumulated_difficulty, serializer);
         <u64>::sse_encode(self.timestamp, serializer);
     }
 }

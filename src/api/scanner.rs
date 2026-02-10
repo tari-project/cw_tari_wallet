@@ -162,6 +162,7 @@ pub struct ScanConfiguration {
     pub batch_size: u64,
     pub continuous: bool,
     pub poll_interval_seconds: u64,
+    pub required_confirmations: u64,
 }
 
 #[frb(ignore)]
@@ -190,6 +191,7 @@ where
         &config.base_url,
         db_path,
         config.batch_size,
+        config.required_confirmations,
     )
     .mode(mode)
     .account(&config.wallet_name)

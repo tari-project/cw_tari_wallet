@@ -15,10 +15,10 @@ pub struct AccountBalanceDto {
 impl From<minotari_wallet::db::AccountBalance> for AccountBalanceDto {
     fn from(b: minotari_wallet::db::AccountBalance) -> Self {
         Self {
-            total: b.total,
-            unconfirmed: b.unconfirmed,
-            locked: b.locked,
-            available: b.available,
+            total: b.total.0,
+            unconfirmed: b.unconfirmed.0,
+            locked: b.locked.0,
+            available: b.available.0,
         }
     }
 }
