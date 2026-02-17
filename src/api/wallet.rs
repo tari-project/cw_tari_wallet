@@ -5,6 +5,7 @@ use flutter_rust_bridge::frb;
 use minotari_wallet::db::get_accounts;
 use minotari_wallet::utils::delete_wallet::delete_wallet as lib_delete_wallet;
 use minotari_wallet::utils::init_wallet::{init_with_seed_words, init_with_view_key};
+use minotari_wallet::utils::rename_wallet::rename_wallet as lib_rename_wallet;
 use std::str::FromStr;
 use tari_common::configuration::Network;
 use tari_common::network_check::set_network_if_choice_valid;
@@ -220,4 +221,14 @@ pub fn list_wallets() -> Result<Vec<String>> {
     let names = accounts.into_iter().map(|a| a.friendly_name).collect();
 
     Ok(names)
+}
+
+#[frb]
+pub fn rename_wallet(current_wallet_name: String, new_wallet_name: String) -> Result<()> {
+    let path = get_db_path()?;
+
+    lib_rename_wallet(&path, &current_wallet_name, &new_wallet_name)
+        .context("Failed to rename wallet")?;
+
+    Ok(())
 }
