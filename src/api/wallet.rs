@@ -3,9 +3,7 @@ use crate::api::network::{parse_network, TariNetwork};
 use anyhow::{anyhow, Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::db::get_accounts;
-use minotari_wallet::utils::delete_wallet::delete_wallet as lib_delete_wallet;
 use minotari_wallet::utils::init_wallet::{init_with_seed_words, init_with_view_key};
-use minotari_wallet::utils::rename_wallet::rename_wallet as lib_rename_wallet;
 use std::str::FromStr;
 use tari_common::configuration::Network;
 use tari_common::network_check::set_network_if_choice_valid;
@@ -205,9 +203,9 @@ fn split_hidden_words(hidden: Hidden<String>) -> Vec<String> {
 
 #[frb]
 pub fn delete_wallet(wallet_name: String) -> Result<()> {
-    let path = get_db_path()?;
+    let conn = get_db_connection()?;
 
-    lib_delete_wallet(&path, &wallet_name).context("Failed to delete wallet account")?;
+    minotari_wallet::db::delete_account(&conn, &wallet_name).context("Failed to rename wallet")?;
 
     Ok(())
 }
@@ -225,9 +223,9 @@ pub fn list_wallets() -> Result<Vec<String>> {
 
 #[frb]
 pub fn rename_wallet(current_wallet_name: String, new_wallet_name: String) -> Result<()> {
-    let path = get_db_path()?;
+    let conn = get_db_connection()?;
 
-    lib_rename_wallet(&path, &current_wallet_name, &new_wallet_name)
+    minotari_wallet::db::update_account_name(&conn, &current_wallet_name, &new_wallet_name)
         .context("Failed to rename wallet")?;
 
     Ok(())
