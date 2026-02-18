@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1241815424;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1934012936;
 
 // Section: executor
 
@@ -634,6 +634,42 @@ fn wire__crate__api__db__initialize_database_impl(
                         let output_ok = crate::api::db::initialize_database(api_path)?;
                         Ok(output_ok)
                     })(),
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__base_node__is_node_synced_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "is_node_synced",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_base_url = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || async move {
+                        let output_ok = crate::api::base_node::is_node_synced(api_base_url).await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
                 )
             }
         },
@@ -1753,21 +1789,22 @@ fn pde_ffi_dispatcher_primary_impl(
             data_len,
         ),
         15 => wire__crate__api__db__initialize_database_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__wallet__list_wallets_impl(port, ptr, rust_vec_len, data_len),
-        18 => {
+        16 => wire__crate__api__base_node__is_node_synced_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__wallet__list_wallets_impl(port, ptr, rust_vec_len, data_len),
+        19 => {
             wire__crate__api__logger__logger_config_default_impl(port, ptr, rust_vec_len, data_len)
         }
-        19 => wire__crate__api__wallet__rename_wallet_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__wallet__restore_wallet_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__wallet__reveal_seed_words_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__send_transaction__send_transaction_impl(
+        20 => wire__crate__api__wallet__rename_wallet_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__wallet__restore_wallet_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__wallet__reveal_seed_words_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__send_transaction__send_transaction_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        23 => wire__crate__api__scanner__start_scan_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__scanner__stop_scan_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__scanner__start_scan_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__scanner__stop_scan_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1791,7 +1828,7 @@ fn pde_ffi_dispatcher_sync_impl(
             data_len,
         ),
         14 => wire__crate__api__logger__init_logger_impl(ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__seeds__list_words_impl(ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__seeds__list_words_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

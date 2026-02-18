@@ -52,3 +52,11 @@ pub async fn get_tip_info(base_url: String) -> Result<Option<TipInfo>> {
     let tip_info = wallet_client.get_tip_info().await?;
     Ok(tip_info.metadata.map(Into::into))
 }
+
+pub async fn is_node_synced(base_url: String) -> Result<bool> {
+    let base_url = base_url.parse().context("Failed to parse base URL")?;
+    let wallet_client = WalletHttpClient::new(base_url)?;
+
+    let tip_info = wallet_client.get_tip_info().await?;
+    Ok(tip_info.is_synced)
+}
