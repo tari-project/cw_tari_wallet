@@ -205,7 +205,7 @@ fn split_hidden_words(hidden: Hidden<String>) -> Vec<String> {
 pub fn delete_wallet(wallet_name: String) -> Result<()> {
     let conn = get_db_connection()?;
 
-    minotari_wallet::db::delete_account(&conn, &wallet_name).context("Failed to rename wallet")?;
+    minotari_wallet::db::delete_account(&conn, &wallet_name).context("Failed to delete wallet")?;
 
     Ok(())
 }

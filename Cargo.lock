@@ -2039,7 +2039,7 @@ dependencies = [
 [[package]]
 name = "minotari"
 version = "0.1.0"
-source = "git+https://github.com/tari-project/minotari-cli.git?rev=8489f17cd52e6dbd698d2e816bf39844486af6ff#8489f17cd52e6dbd698d2e816bf39844486af6ff"
+source = "git+https://github.com/tari-project/minotari-cli.git?rev=8dc74a48f025345a0451a69275d221b8d617077a#8dc74a48f025345a0451a69275d221b8d617077a"
 dependencies = [
  "anyhow",
  "argon2 0.5.3",
