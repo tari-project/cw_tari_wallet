@@ -1219,6 +1219,7 @@ impl SseDecode for crate::api::transactions::DisplayedTransactionStatus {
             3 => crate::api::transactions::DisplayedTransactionStatus::Cancelled,
             4 => crate::api::transactions::DisplayedTransactionStatus::Reorganized,
             5 => crate::api::transactions::DisplayedTransactionStatus::Rejected,
+            6 => crate::api::transactions::DisplayedTransactionStatus::Locked,
             _ => unreachable!("Invalid variant for DisplayedTransactionStatus: {}", inner),
         };
     }
@@ -2000,6 +2001,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::transactions::DisplayedTransa
             Self::Cancelled => 3.into_dart(),
             Self::Reorganized => 4.into_dart(),
             Self::Rejected => 5.into_dart(),
+            Self::Locked => 6.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -2631,6 +2633,7 @@ impl SseEncode for crate::api::transactions::DisplayedTransactionStatus {
                 crate::api::transactions::DisplayedTransactionStatus::Cancelled => 3,
                 crate::api::transactions::DisplayedTransactionStatus::Reorganized => 4,
                 crate::api::transactions::DisplayedTransactionStatus::Rejected => 5,
+                crate::api::transactions::DisplayedTransactionStatus::Locked => 6,
                 _ => {
                     unimplemented!("");
                 }

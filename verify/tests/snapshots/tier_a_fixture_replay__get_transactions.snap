@@ -1,0 +1,21 @@
+---
+source: verify/tests/tier_a_fixture_replay.rs
+expression: "txs.iter().map(TransactionSnapshot::from).collect::<Vec<_>>()"
+---
+[
+  {
+    "id": "42",
+    "direction": "Incoming",
+    "source": "Coinbase",
+    "status": "Confirmed",
+    "amount": 5000000,
+    "amount_display": "5.000000 XTM",
+    "message": "fixture coinbase",
+    "counterparty": null,
+    "block_height": 12345,
+    "timestamp": "2023-11-14 22:13:20",
+    "confirmations": 7,
+    "fee": null,
+    "payrefs": []
+  }
+]

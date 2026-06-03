@@ -7,6 +7,7 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+/temp
 node_modules
 dist
 dist-ssr
@@ -40,5 +41,14 @@ tari-win-bundler/logs
 tari-win-bundler/bin
 
 # Dart
+# Ignore everything under .dart/ by default, then un-ignore the committed bridge
+# contract: the generated Dart surface consumed by Cake Wallet. Tooling noise
+# (.dart_tool/, pubspec.lock) stays ignored.
 .dart/*
 !.dart/pubspec.yaml
+!.dart/api/
+!.dart/api/**
+!.dart/frb_generated.dart
+!.dart/frb_generated.io.dart
+!.dart/frb_generated.web.dart
+!.dart/lib.dart

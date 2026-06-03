@@ -1,0 +1,7 @@
+---
+source: verify/tests/tier_a_fixture_replay.rs
+expression: wallets
+---
+[
+  "verify-fixture"
+]

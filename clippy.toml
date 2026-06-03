@@ -1,0 +1,7 @@
+# Clippy configuration for rust_lib_flutter_rust_wallet.
+#
+# No numeric thresholds are tuned yet; lint enforcement is flag-based
+# (`cargo clippy --all-targets --all-features -- -D warnings`) plus the
+# crate-level `#![warn(...)]` policy in `src/lib.rs`. This file exists so
+# future threshold tuning (e.g. `too-many-arguments-threshold`,
+# `cognitive-complexity-threshold`) has a documented home.

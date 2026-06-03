@@ -1,0 +1,60 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard"
+  ],
+  "commitMessagePrefix": "deps:",
+  "timezone": "UTC",
+  "schedule": ["before 6am on monday"],
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "rangeStrategy": "bump",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on the first day of the month"]
+  },
+  "packageRules": [
+    {
+      "description": "Group routine crates.io updates into one weekly PR to keep noise low. Every PR is gated by the full CI matrix (build, test, cargo-deny, bridge codegen drift, public API stability).",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "groupName": "cargo dependencies (non-major)"
+    },
+    {
+      "description": "flutter_rust_bridge is pinned `=2.11.1` and MUST move in lockstep with the codegen CLI version (FRB_CODEGEN_VERSION in .github/workflows/ci.yml) and the install instructions in README.md / CONTRIBUTING.md. A skewed CLI reformats the generated bridge and the codegen-drift job fails spuriously. Never auto-merge: open the PR, but require a human to update the CLI pin + docs in the same change.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["flutter_rust_bridge"],
+      "groupName": "flutter_rust_bridge (manual lockstep with codegen CLI)",
+      "automerge": false,
+      "labels": ["dependencies", "frb-coordinated-bump"],
+      "addLabels": ["frb-coordinated-bump"]
+    },
+    {
+      "description": "Pre-release tari_* crates (5.3.1-pre.0) can change struct/enum shape between pre-releases. The `From<minotari::…>` conversions and the enum-mapping tests are the early warning. Never auto-merge; review the conversions when this lands.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["tari_common", "tari_common_types", "tari_transaction_components", "tari_crypto", "tari_utilities"],
+      "groupName": "tari_* crates (review From conversions)",
+      "automerge": false,
+      "labels": ["dependencies", "tari-stack-bump"],
+      "addLabels": ["tari-stack-bump"]
+    }
+  ],
+  "git-submodules": {
+    "enabled": false
+  },
+  "customManagers": [
+    {
+      "description": "Track the git-pinned `minotari` rev so Renovate proposes digest (rev) updates from the minotari-cli default branch. Cargo's native git-rev digest support is limited; this regex manager pins the lookup explicitly. A bump here MUST re-verify the `From<minotari::…>` conversions (transactions.rs, balance.rs, fee.rs, scanner.rs, base_node.rs) — see CONTRIBUTING.md. Never auto-merge.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^Cargo\\.toml$/"],
+      "matchStrings": [
+        "git\\s*=\\s*\"(?<packageName>https://github\\.com/tari-project/minotari-cli\\.git)\",\\s*rev\\s*=\\s*\"(?<currentDigest>[a-f0-9]{40})\""
+      ],
+      "currentValueTemplate": "main",
+      "datasourceTemplate": "git-refs",
+      "depNameTemplate": "minotari-cli"
+    }
+  ]
+}

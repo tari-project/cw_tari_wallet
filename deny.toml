@@ -1,0 +1,98 @@
+# cargo-deny configuration for rust_lib_flutter_rust_wallet.
+#
+# Run with: cargo deny check
+# CI wiring: `.github/workflows/ci.yml` runs `cargo deny check` as a
+# merge gate; `.github/workflows/audit.yml` runs `cargo deny check advisories`
+# daily to surface new RUSTSEC advisories without waiting for a PR.
+#
+# Maintaining the ignore list (the dependency-update policy, see CONTRIBUTING.md
+# "Dependency & release management"):
+#   1. Each entry must be a *transitive* advisory this crate cannot directly
+#      remediate, with a one-line justification.
+#   2. Before adding an entry, first try `cargo update -p <crate> --precise
+#      <patched>` — a semver-compatible lockfile bump that fixes the advisory is
+#      always preferred over an ignore (the bridge zero-diff guard proves it did
+#      not touch the public contract).
+#   3. Revisit the list whenever the `minotari` rev or a `tari_*` crate is
+#      bumped: an upstream release may make a previously unfixable advisory
+#      remediable, in which case the entry must be pruned.
+
+[advisories]
+# Pull from the default advisory DB. Yanked crates surface as warnings rather
+# than hard errors so a single upstream yank does not turn the gate permanently
+# red; the daily audit still reports them.
+version = 2
+yanked = "warn"
+# Pre-existing *unmaintained* advisories that originate entirely in transitive
+# dependencies pulled by the Tari / minotari stack. cargo-deny reports each as
+# `Solution: No safe upgrade is available!` — there is no semver-compatible
+# version that drops the advisory, so they cannot be remediated without an
+# upstream minotari/tari release that swaps the crate out. They are ignored so
+# the gate stays meaningful for issues this repo can act on (direct deps, new
+# *vulnerability* advisories) instead of being permanently red.
+#
+# NOTE: the formerly-ignored *vulnerability* advisories (RUSTSEC-2026-0009 in
+# `time`, RUSTSEC-2026-0049/0098/0099/0104 in `rustls-webpki`) were remediated
+# by semver-compatible lockfile bumps (`time` 0.3.44 -> 0.3.47,
+# `rustls-webpki` 0.103.8 -> 0.103.13) and removed from this list. Re-run
+# `cargo deny check advisories` after any dependency bump and prune any entry
+# that a fix has made unnecessary.
+ignore = [
+    # Unmaintained transitive crates (warnings promoted to errors by default);
+    # all report "No safe upgrade is available!".
+    "RUSTSEC-2024-0370", # proc-macro-error — unmaintained (build-time macro dep)
+    "RUSTSEC-2024-0384", # instant — unmaintained
+    "RUSTSEC-2024-0388", # derivative — unmaintained
+    "RUSTSEC-2024-0436", # paste — unmaintained
+    "RUSTSEC-2025-0141", # bincode — unmaintained
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[licenses]
+version = 2
+# Common permissive licenses present in the dependency tree.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "BSL-1.0",
+    "Unlicense",
+    "OpenSSL",
+]
+confidence-threshold = 0.8
+# Crate-scoped exceptions for licenses we tolerate from a single dependency but
+# do not want to allow tree-wide. `newtype-ops` (a transitive dep via the Tari
+# stack) ships under WTFPL, a permissive public-domain-equivalent license.
+exceptions = [
+    { name = "newtype-ops", allow = ["WTFPL"] },
+]
+
+# The workspace crates (the Flutter bridge library and the `verify` end-to-end
+# harness) are never published to crates.io (both marked `publish = false`). Treat
+# all local `publish = false` crates as private so cargo-deny does not flag them as
+# unlicensed.
+[licenses.private]
+ignore = true
+
+# `allo-isolate` declares its license via `license-file = "LICENSE"` (an
+# Apache-2.0 text) rather than an SPDX `license` field, so cargo-deny cannot
+# harvest an expression automatically. Clarify it explicitly.
+[[licenses.clarify]]
+name = "allo-isolate"
+expression = "Apache-2.0"
+license-files = [{ path = "LICENSE", hash = 0x7b5d04bc }]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = ["https://github.com/tari-project/minotari-cli.git"]

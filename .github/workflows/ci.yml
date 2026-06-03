@@ -1,0 +1,140 @@
+name: CI
+
+# Branch protection (a maintainer applies this in GitHub repo settings; it is
+# documented in CONTRIBUTING.md): require all of these checks to pass before
+# merging to `main` — `rustfmt`, `clippy`, `build`, `test`, `cargo-deny`,
+# `bridge codegen drift`, and `public API stability`. The `breaking-api-approved`
+# label is the only sanctioned way to merge a deliberate, coordinated API break.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref (e.g. force-pushes to a PR branch).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keep this in lockstep with the FRB runtime pin in Cargo.toml (`=2.11.1`).
+  # A mismatched codegen CLI reformats output and produces spurious drift.
+  FRB_CODEGEN_VERSION: "2.11.1"
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        # Honors rust-toolchain.toml; `@stable` is used across all jobs here.
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # `--workspace` so the `verify` harness crate is linted too.
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Host build validates the lib + cdylib + staticlib crate types plus the
+      # `verify` harness crate. Cross targets (Android/iOS) need a full
+      # Flutter/NDK toolchain and are tracked as a follow-up; the host
+      # build is the merge gate.
+      - run: cargo build --workspace --all-targets
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # `--workspace` runs the verification harness Tier A (fixture replay)
+      # and Tier B (recorded RPC) integration tests alongside the library unit
+      # tests. Tier C (live-e2e) has no `#[test]` and never runs here — it is a
+      # gated bin exercised only by the nightly `nightly-live-e2e` workflow.
+      - run: cargo test --workspace --all-features
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No rust-cache: `cargo deny check` reads metadata, never compiles.
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.19.8
+      - run: cargo deny check
+
+  codegen-drift:
+    name: bridge codegen drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Assert FRB runtime pin matches codegen CLI version
+        # Cheap lockstep guard: the flutter_rust_bridge runtime pinned
+        # in Cargo.toml (`=2.11.1`) and FRB_CODEGEN_VERSION must be identical, or
+        # the CLI reformats the generated output and this job fails spuriously.
+        run: |
+          runtime="$(grep -oE 'flutter_rust_bridge = "=[0-9.]+"' Cargo.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+          echo "Cargo.toml FRB runtime: $runtime ; FRB_CODEGEN_VERSION: $FRB_CODEGEN_VERSION"
+          if [ "$runtime" != "$FRB_CODEGEN_VERSION" ]; then
+            echo "::error::FRB runtime pin ($runtime) != FRB_CODEGEN_VERSION ($FRB_CODEGEN_VERSION). Bump both (and the README/CONTRIBUTING install lines) in lockstep."
+            exit 1
+          fi
+      - name: Set up Dart SDK
+        # The codegen tool needs a Dart SDK matching .dart/pubspec.yaml (>=3.3.0).
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - name: Install flutter_rust_bridge_codegen (pinned)
+        # Pin the exact version to match the FRB runtime; otherwise the CLI
+        # reformats generated output and the drift check fails spuriously.
+        uses: taiki-e/install-action@v2
+        with:
+          tool: flutter_rust_bridge_codegen@${{ env.FRB_CODEGEN_VERSION }}
+      - name: Regenerate bridge
+        run: make gen
+      - name: Fail on stale bridge output
+        run: |
+          git diff --exit-code -- src/frb_generated.rs '.dart/**' \
+            || { echo "::error::Bridge output is stale — run 'make gen' and commit the result."; exit 1; }
+
+  api-stability:
+    name: public API stability
+    runs-on: ubuntu-latest
+    # The merge-base diff is only meaningful for pull requests.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need both the PR head and the base ref to compute the merge-base diff.
+          fetch-depth: 0
+      - name: Check public Dart API stability
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+          # Set to "true" automatically when the PR carries the override label.
+          OVERRIDE: ${{ contains(github.event.pull_request.labels.*.name, 'breaking-api-approved') }}
+        run: ./scripts/check_api_stability.sh "$BASE_REF" HEAD

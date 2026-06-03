@@ -1,0 +1,20 @@
+name: Security audit
+
+on:
+  schedule:
+    # Daily at 06:00 UTC — surface new RUSTSEC advisories without waiting for a PR.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  advisories:
+    name: cargo-deny advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.19.8
+      - run: cargo deny check advisories

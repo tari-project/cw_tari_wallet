@@ -1,9 +1,11 @@
-use crate::api::{db::get_db_connection, utils::format_micro_tari};
-use anyhow::{Context, Result};
+use crate::api::{db::get_db_connection, error::WalletError, utils::format_micro_tari};
+use anyhow::Result;
 use flutter_rust_bridge::frb;
 use minotari_wallet::{
     db::get_displayed_transactions_paginated, get_accounts, utils::timestamp::format_timestamp,
 };
+/// Fee charged on a transaction: `amount` in **microTari** plus a pre-formatted
+/// `amount_display` string for the UI.
 #[frb]
 #[derive(Debug, Clone)]
 pub struct FeeInfoDto {
@@ -20,6 +22,8 @@ impl From<minotari_wallet::transactions::FeeInfo> for FeeInfoDto {
     }
 }
 
+/// Where a transaction sits on chain: `block_height`, a formatted `timestamp`
+/// string, and the number of `confirmations` (blocks) on top of it.
 #[frb]
 #[derive(Debug, Clone)]
 pub struct BlockchainInfoDto {
@@ -38,6 +42,8 @@ impl From<minotari_wallet::transactions::BlockchainInfo> for BlockchainInfoDto {
     }
 }
 
+/// The other party to a transaction: their base58 `address` and the same
+/// address rendered as an `address_emoji` string.
 #[frb]
 #[derive(Debug, Clone)]
 pub struct CounterpartyInfoDto {
@@ -54,6 +60,7 @@ impl From<tari_common_types::tari_address::TariAddress> for CounterpartyInfoDto 
     }
 }
 
+/// Whether a transaction credited (`Incoming`) or debited (`Outgoing`) the wallet.
 #[frb]
 #[derive(Debug, Clone)]
 pub enum DisplayedTransactionDirection {
@@ -70,6 +77,8 @@ impl From<minotari_wallet::transactions::TransactionDirection> for DisplayedTran
     }
 }
 
+/// How a transaction originated: a regular `Transfer`, mining `Coinbase`,
+/// `OneSided` payment, or `Unknown`.
 #[frb]
 #[derive(Debug, Clone)]
 pub enum DisplayedTransactionSource {
@@ -90,6 +99,7 @@ impl From<minotari_wallet::transactions::TransactionSource> for DisplayedTransac
     }
 }
 
+/// The display status of a transaction as shown in the wallet UI.
 #[frb]
 #[derive(Debug, Clone)]
 pub enum DisplayedTransactionStatus {
@@ -99,6 +109,7 @@ pub enum DisplayedTransactionStatus {
     Cancelled,
     Reorganized,
     Rejected,
+    Locked,
 }
 
 impl From<minotari_wallet::transactions::TransactionDisplayStatus> for DisplayedTransactionStatus {
@@ -114,10 +125,15 @@ impl From<minotari_wallet::transactions::TransactionDisplayStatus> for Displayed
                 Self::Reorganized
             }
             minotari_wallet::transactions::TransactionDisplayStatus::Rejected => Self::Rejected,
+            minotari_wallet::transactions::TransactionDisplayStatus::Locked => Self::Locked,
         }
     }
 }
 
+/// A transaction as displayed in the wallet UI.
+///
+/// `amount` is in **microTari** with a pre-formatted `amount_display`. `counterparty`
+/// and `fee` are absent for some kinds. `payrefs` are hex payment-reference hashes.
 #[frb]
 #[derive(Debug, Clone)]
 pub struct DisplayedTransactionDto {
@@ -157,6 +173,11 @@ impl From<minotari_wallet::DisplayedTransaction> for DisplayedTransactionDto {
     }
 }
 
+/// List a page of the wallet's transactions, most recent first.
+///
+/// `limit`/`offset` paginate the result. Requires
+/// [`initialize_database`](crate::api::db::initialize_database) first.
+/// Synchronous; errors if the account does not exist.
 #[frb]
 pub fn get_transactions(
     wallet_name: String,
@@ -165,11 +186,89 @@ pub fn get_transactions(
 ) -> Result<Vec<DisplayedTransactionDto>> {
     let mut conn = get_db_connection()?;
     let accounts = &get_accounts(&mut conn, Some(&wallet_name))?;
-    let account = accounts
-        .first()
-        .context("No accounts found for this wallet")?;
+    let account = accounts.first().ok_or(WalletError::NoAccounts)?;
 
     let transactions = get_displayed_transactions_paginated(&conn, account.id, limit, offset)?;
 
     Ok(transactions.into_iter().map(Into::into).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Enum-mapping tests. Pure conversions, no I/O. These are upstream-drift
+    //! tripwires: if `minotari`'s transaction enums add/rename a variant, the
+    //! `From` impls (and these exhaustive assertions) must be revisited.
+    //!
+    //! The DTO enums derive only `Debug`/`Clone` (no `PartialEq`), so equality is
+    //! asserted with `matches!` against the expected variant.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use minotari_wallet::transactions::{
+        TransactionDirection, TransactionDisplayStatus, TransactionSource,
+    };
+
+    #[test]
+    fn direction_maps_exhaustively() {
+        assert!(matches!(
+            DisplayedTransactionDirection::from(TransactionDirection::Incoming),
+            DisplayedTransactionDirection::Incoming
+        ));
+        assert!(matches!(
+            DisplayedTransactionDirection::from(TransactionDirection::Outgoing),
+            DisplayedTransactionDirection::Outgoing
+        ));
+    }
+
+    #[test]
+    fn source_maps_exhaustively() {
+        assert!(matches!(
+            DisplayedTransactionSource::from(TransactionSource::Transfer),
+            DisplayedTransactionSource::Transfer
+        ));
+        assert!(matches!(
+            DisplayedTransactionSource::from(TransactionSource::Coinbase),
+            DisplayedTransactionSource::Coinbase
+        ));
+        assert!(matches!(
+            DisplayedTransactionSource::from(TransactionSource::OneSided),
+            DisplayedTransactionSource::OneSided
+        ));
+        assert!(matches!(
+            DisplayedTransactionSource::from(TransactionSource::Unknown),
+            DisplayedTransactionSource::Unknown
+        ));
+    }
+
+    #[test]
+    fn status_maps_exhaustively() {
+        assert!(matches!(
+            DisplayedTransactionStatus::from(TransactionDisplayStatus::Pending),
+            DisplayedTransactionStatus::Pending
+        ));
+        assert!(matches!(
+            DisplayedTransactionStatus::from(TransactionDisplayStatus::Unconfirmed),
+            DisplayedTransactionStatus::Unconfirmed
+        ));
+        assert!(matches!(
+            DisplayedTransactionStatus::from(TransactionDisplayStatus::Confirmed),
+            DisplayedTransactionStatus::Confirmed
+        ));
+        assert!(matches!(
+            DisplayedTransactionStatus::from(TransactionDisplayStatus::Cancelled),
+            DisplayedTransactionStatus::Cancelled
+        ));
+        assert!(matches!(
+            DisplayedTransactionStatus::from(TransactionDisplayStatus::Reorganized),
+            DisplayedTransactionStatus::Reorganized
+        ));
+        assert!(matches!(
+            DisplayedTransactionStatus::from(TransactionDisplayStatus::Rejected),
+            DisplayedTransactionStatus::Rejected
+        ));
+        assert!(matches!(
+            DisplayedTransactionStatus::from(TransactionDisplayStatus::Locked),
+            DisplayedTransactionStatus::Locked
+        ));
+    }
 }
