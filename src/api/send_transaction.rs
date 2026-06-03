@@ -259,7 +259,7 @@ mod tests {
     /// order) so `RistrettoSecretKey::from_canonical_bytes` always succeeds. This
     /// is obviously not a real address — it exists only to exercise the base58
     /// parse path in `validate_inputs`.
-    fn deterministic_recipient_base58() -> String {
+    fn deterministic_recipient_base58(network: Network) -> String {
         let mut view_bytes = [0u8; 32];
         view_bytes[0] = 7;
         let mut spend_bytes = [0u8; 32];
@@ -273,7 +273,7 @@ mod tests {
         let view_pk = CompressedPublicKey::from_secret_key(&view_sk);
         let spend_pk = CompressedPublicKey::from_secret_key(&spend_sk);
 
-        TariAddress::new_dual_address_with_default_features(view_pk, spend_pk, Network::MainNet)
+        TariAddress::new_dual_address_with_default_features(view_pk, spend_pk, network)
             .expect("constructing a dual address from valid keys must succeed")
             .to_base58()
     }
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn rejects_zero_amount_with_frozen_boundary_string() {
-        let details = details_with(deterministic_recipient_base58(), 0, None);
+        let details = details_with(deterministic_recipient_base58(Network::MainNet), 0, None);
         // `ValidatedInputs` deliberately has no `Debug`, so we destructure the
         // `Result` instead of using `expect_err`.
         let Err(err) = validate_inputs(&details) else {
@@ -325,6 +325,32 @@ mod tests {
         assert!(
             err.to_string().starts_with("Invalid Recipient Address: "),
             "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_network_recipient_with_frozen_boundary_prefix() {
+        // The wallet's details resolve to MainNet (`details_with` hard-codes it), but
+        // the recipient address is encoded for Esmeralda — a cross-network send.
+        let details = details_with(
+            deterministic_recipient_base58(Network::Esmeralda),
+            1_000,
+            None,
+        );
+        let Err(err) = validate_inputs(&details) else {
+            panic!("a cross-network recipient must be rejected");
+        };
+        // BASELINE CONTRACT: the new rejection reuses the frozen
+        // `"Invalid Recipient Address: "` prefix (Shared Contracts §2).
+        assert!(
+            err.to_string().starts_with("Invalid Recipient Address: "),
+            "unexpected message: {err}"
+        );
+        // Pin the exact new message. `Network`'s `Display` emits lowercase key strings
+        // (`mainnet` / `esmeralda`), so the values are lowercase (ledger D2).
+        assert_eq!(
+            err.to_string(),
+            "Invalid Recipient Address: address network (esmeralda) does not match the configured network (mainnet)"
         );
     }
 
@@ -379,7 +405,11 @@ mod tests {
 
     #[test]
     fn adapter_resolves_network_and_passes_through_valid_inputs() {
-        let details = details_with(deterministic_recipient_base58(), 1_000, None);
+        let details = details_with(
+            deterministic_recipient_base58(Network::MainNet),
+            1_000,
+            None,
+        );
         let validated = validate_inputs(&details).expect("valid inputs must succeed");
         assert_eq!(validated.amount, MicroMinotari(1_000));
         // Proves the adapter resolved `Some(MainNet)` via `parse_network`.

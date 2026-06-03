@@ -22,6 +22,7 @@ pub(crate) struct ValidatedInputs {
 /// Validate the caller-supplied send-transaction fields.
 ///
 /// - parses `recipient_address` from base58,
+/// - rejects a recipient address whose encoded network does not match `network`,
 /// - rejects a zero `amount`,
 /// - applies the [`DEFAULT_CONFIRMATION_WINDOW`] fallback for `confirmation_window`.
 ///
@@ -36,6 +37,14 @@ pub(crate) fn validate_send_inputs(
 ) -> Result<ValidatedInputs, WalletError> {
     let recipient_address = TariAddress::from_base58(recipient_address)
         .map_err(|e| WalletError::invalid_address(e.to_string()))?;
+
+    if recipient_address.network() != network {
+        return Err(WalletError::invalid_address(format!(
+            "address network ({}) does not match the configured network ({})",
+            recipient_address.network(),
+            network
+        )));
+    }
 
     if amount == 0 {
         return Err(WalletError::wallet("Amount must be greater than zero"));
@@ -63,7 +72,7 @@ mod tests {
     use tari_crypto::ristretto::RistrettoSecretKey;
     use tari_utilities::ByteArray;
 
-    fn deterministic_recipient_base58() -> String {
+    fn deterministic_recipient_base58(network: Network) -> String {
         let mut view_bytes = [0u8; 32];
         view_bytes[0] = 7;
         let mut spend_bytes = [0u8; 32];
@@ -77,14 +86,14 @@ mod tests {
         let view_pk = CompressedPublicKey::from_secret_key(&view_sk);
         let spend_pk = CompressedPublicKey::from_secret_key(&spend_sk);
 
-        TariAddress::new_dual_address_with_default_features(view_pk, spend_pk, Network::MainNet)
+        TariAddress::new_dual_address_with_default_features(view_pk, spend_pk, network)
             .expect("constructing a dual address from valid keys must succeed")
             .to_base58()
     }
 
     #[test]
     fn rejects_zero_amount() {
-        let recipient = deterministic_recipient_base58();
+        let recipient = deterministic_recipient_base58(Network::MainNet);
         // `ValidatedInputs` deliberately has no `Debug`, so destructure the result.
         let Err(err) = validate_send_inputs(Network::MainNet, &recipient, 0, None) else {
             panic!("zero amount must be rejected");
@@ -112,7 +121,7 @@ mod tests {
 
     #[test]
     fn accepts_good_fixture_with_nonzero_amount() {
-        let recipient = deterministic_recipient_base58();
+        let recipient = deterministic_recipient_base58(Network::MainNet);
         let validated = validate_send_inputs(Network::MainNet, &recipient, 1_000, None)
             .expect("valid inputs must succeed");
         assert_eq!(validated.amount, MicroMinotari(1_000));
@@ -120,8 +129,30 @@ mod tests {
     }
 
     #[test]
+    fn accepts_matching_non_mainnet_network() {
+        let recipient = deterministic_recipient_base58(Network::Esmeralda);
+        let validated = validate_send_inputs(Network::Esmeralda, &recipient, 1_000, None)
+            .expect("a same-network recipient must succeed");
+        assert_eq!(validated.network, Network::Esmeralda);
+    }
+
+    #[test]
+    fn rejects_recipient_on_wrong_network() {
+        // Recipient encoded for Esmeralda, but the wallet is configured for MainNet.
+        let recipient = deterministic_recipient_base58(Network::Esmeralda);
+        let Err(err) = validate_send_inputs(Network::MainNet, &recipient, 1_000, None) else {
+            panic!("a cross-network recipient must be rejected");
+        };
+        // BASELINE CONTRACT: maps to "Invalid Recipient Address: …" at the boundary.
+        assert!(
+            matches!(err, WalletError::InvalidAddress { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
     fn applies_default_confirmation_window_when_none() {
-        let recipient = deterministic_recipient_base58();
+        let recipient = deterministic_recipient_base58(Network::MainNet);
         let validated = validate_send_inputs(Network::MainNet, &recipient, 1_000, None)
             .expect("valid inputs must succeed");
         assert_eq!(validated.confirmations, DEFAULT_CONFIRMATION_WINDOW);
@@ -130,7 +161,7 @@ mod tests {
 
     #[test]
     fn honours_explicit_confirmation_window() {
-        let recipient = deterministic_recipient_base58();
+        let recipient = deterministic_recipient_base58(Network::MainNet);
         let validated = validate_send_inputs(Network::MainNet, &recipient, 1_000, Some(12))
             .expect("valid inputs must succeed");
         assert_eq!(validated.confirmations, 12);
