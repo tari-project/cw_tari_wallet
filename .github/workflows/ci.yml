@@ -43,6 +43,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      # `minotari_app_grpc` (transitive `minotari` dep) compiles `.proto` files
+      # in its build script and requires the Protocol Buffers compiler.
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
       # `--workspace` so the `verify` harness crate is linted too.
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -53,6 +58,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # `minotari_app_grpc` (transitive `minotari` dep) compiles `.proto` files
+      # in its build script and requires the Protocol Buffers compiler.
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
       # Host build validates the lib + cdylib + staticlib crate types plus the
       # `verify` harness crate. Cross targets (Android/iOS) need a full
@@ -66,6 +76,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # `minotari_app_grpc` (transitive `minotari` dep) compiles `.proto` files
+      # in its build script and requires the Protocol Buffers compiler.
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
       # `--workspace` runs the verification harness Tier A (fixture replay)
       # and Tier B (recorded RPC) integration tests alongside the library unit
@@ -92,6 +107,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # `minotari_app_grpc` (transitive `minotari` dep) compiles `.proto` files
+      # in its build script and requires the Protocol Buffers compiler.
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
       - name: Assert FRB runtime pin matches codegen CLI version
         # Cheap lockstep guard: the flutter_rust_bridge runtime pinned
