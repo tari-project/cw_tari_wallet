@@ -24,10 +24,16 @@ fn main() -> ExitCode {
             }
         },
         Some("live") | Some("smoke") => run_live(),
-        _ => {
+        None => {
+            // Bare invocation: usage is the default, helpful behavior.
             print_usage();
-            // Not an error: usage is the default, helpful behavior.
             ExitCode::SUCCESS
+        }
+        _ => {
+            // Unknown command: still print usage, but signal failure so CI / cron
+            // does not mistake a typo'd command for a successful run.
+            print_usage();
+            ExitCode::FAILURE
         }
     }
 }
