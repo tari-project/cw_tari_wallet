@@ -25,7 +25,7 @@ BASE_REF="${1:?usage: check_api_stability.sh <base-ref> [<head-ref>]}"
 HEAD_REF="${2:-HEAD}"
 OVERRIDE="${OVERRIDE:-false}"
 
-API_GLOB='.dart/api/**'
+API_GLOB='.dart/api/'
 
 # Lines under .dart/api/** that were *removed* by this change. `git diff` with a
 # triple-dot range diffs against the merge-base, matching the merge semantics.
