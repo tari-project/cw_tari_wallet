@@ -28,31 +28,45 @@ use verify::fixture;
 /// DB pool, so running them in parallel would race the shared slot.
 static SERIAL: Mutex<()> = Mutex::new(());
 
+/// RAII guard: keeps the fixture temp dir alive for the test's duration and
+/// guarantees the process-global DB slot is torn down on drop — even if the test
+/// panics on a failed assertion before reaching an explicit teardown.
+struct DbGuard {
+    _dir: tempfile::TempDir,
+}
+
+impl Drop for DbGuard {
+    fn drop(&mut self) {
+        // Best-effort teardown; ignore the result so a disconnect error during
+        // unwind never masks the original panic (and never aborts the process).
+        let _ = disconnect_database();
+    }
+}
+
 /// Materialize a fresh fixture DB in a temp dir and point the global DB at it.
-/// Returns the temp dir guard (kept alive for the test's duration) — the caller
-/// holds the serialization lock and calls `disconnect_database` on teardown.
-fn with_fixture_db() -> tempfile::TempDir {
+/// Returns a [`DbGuard`] that keeps the temp dir alive for the test's duration
+/// and disconnects the global DB on drop, so teardown is deterministic even when
+/// an assertion panics. The caller holds the serialization lock for the test.
+fn with_fixture_db() -> DbGuard {
     let (dir, db_path) = fixture::materialize_fixture_db().expect("build fixture DB");
     initialize_database(db_path.to_string_lossy().to_string()).expect("initialize_database");
-    dir
+    DbGuard { _dir: dir }
 }
 
 #[test]
 fn list_wallets_returns_the_fixture_account() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
-    let _dir = with_fixture_db();
+    let _db = with_fixture_db();
 
     let wallets = list_wallets().expect("list_wallets");
     assert_eq!(wallets, vec![fixture::WALLET_NAME.to_string()]);
     insta::assert_json_snapshot!("list_wallets", wallets);
-
-    disconnect_database().expect("disconnect_database");
 }
 
 #[test]
 fn get_balance_returns_golden_values() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
-    let _dir = with_fixture_db();
+    let _db = with_fixture_db();
 
     let balance = get_balance(fixture::WALLET_NAME.to_string()).expect("get_balance");
 
@@ -68,14 +82,12 @@ fn get_balance_returns_golden_values() {
 
     // Snapshot pins the full DTO shape + content.
     insta::assert_json_snapshot!("get_balance", AccountBalanceSnapshot::from(&balance));
-
-    disconnect_database().expect("disconnect_database");
 }
 
 #[test]
 fn get_address_returns_a_stable_esmeralda_address() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
-    let _dir = with_fixture_db();
+    let _db = with_fixture_db();
 
     // No passphrase (the fixture account was imported with an empty passphrase),
     // encoded for the fixture's network.
@@ -89,14 +101,12 @@ fn get_address_returns_a_stable_esmeralda_address() {
     // A base58 Tari address is non-empty and deterministic for the fixed keys.
     assert!(!address.is_empty(), "address must not be empty");
     insta::assert_snapshot!("get_address", address);
-
-    disconnect_database().expect("disconnect_database");
 }
 
 #[test]
 fn get_transactions_returns_the_golden_transaction() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
-    let _dir = with_fixture_db();
+    let _db = with_fixture_db();
 
     let txs = get_transactions(fixture::WALLET_NAME.to_string(), 100, 0).expect("get_transactions");
 
@@ -129,8 +139,6 @@ fn get_transactions_returns_the_golden_transaction() {
             .map(TransactionSnapshot::from)
             .collect::<Vec<_>>()
     );
-
-    disconnect_database().expect("disconnect_database");
 }
 
 // ---------------------------------------------------------------------------
