@@ -94,22 +94,27 @@ pub async fn is_node_synced(base_url: String) -> Result<bool> {
 /// Probe whether the base node at `base_url` is reachable (a `GET /get_tip_info`
 /// round-trip succeeds). Liveness only, not sync status (use [`is_node_synced`]).
 ///
-/// Returns `Ok(false)` — never `Err` — on parse failure, unreachable node, or
-/// timeout, so Dart's `checkNodeHealth()` maps to a plain `bool`. Uses a short
-/// timeout for snappy "test connection" UX. Errors only on client construction
-/// failure. Part of the frozen public contract (ledger D2) even though it has no
-/// explicit `#[frb]`.
+/// Returns `Ok(false)` — never `Err` — on parse failure, client construction
+/// failure, unreachable node, or timeout, so Dart's `checkNodeHealth()` maps to
+/// a plain `bool` with no `try`/`catch`. Uses a short timeout for snappy "test
+/// connection" UX. Part of the frozen public contract (ledger D2) even though it
+/// has no explicit `#[frb]`.
 pub async fn check_node_health(base_url: String) -> Result<bool> {
     let url = match base_url.parse() {
         Ok(url) => url,
         // Bad URL is "not healthy", not an error: keep the Dart mapping a plain bool.
         Err(_) => return Ok(false),
     };
-    let client = WalletHttpClient::with_config(
+    let client = match WalletHttpClient::with_config(
         url,
         HEALTH_MAX_RETRIES,
         Duration::from_secs(HEALTH_TIMEOUT_SECS),
-    )?;
+    ) {
+        Ok(client) => client,
+        // Client construction failure (e.g. TLS backend init) means no node can be
+        // probed at all: report "not healthy" rather than throwing into Dart.
+        Err(_) => return Ok(false),
+    };
     // is_online maps Ok => true, Err (unreachable/timeout) => false.
     Ok(client.is_online().await)
 }
