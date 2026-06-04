@@ -6,12 +6,19 @@
 //! and the signature is bound to the wallet message-signing domain tag.
 
 use crate::api::error::WalletError;
-use crate::api::signing::{INVALID_NONCE_COMPONENT, INVALID_SIG_COMPONENT, MALFORMED_SIG_FORMAT};
 use rand::rng;
 use tari_common_types::types::{PrivateKey, SignatureWithDomain, UncompressedPublicKey};
 use tari_crypto::ristretto::RistrettoPublicKey;
 use tari_hashing::WalletMessageSigningDomain;
 use tari_utilities::hex::Hex;
+
+/// Frozen Dart-visible signing-error strings, owned by the layer that produces
+/// them. Re-exported by `crate::api::signing`. Once shipped these are part of the
+/// public contract — changing the wording is a breaking change.
+pub(crate) const MALFORMED_SIG_FORMAT: &str =
+    "signature must be in '<signature_hex>|<public_nonce_hex>' format";
+pub(crate) const INVALID_SIG_COMPONENT: &str = "invalid signature component";
+pub(crate) const INVALID_NONCE_COMPONENT: &str = "invalid public nonce";
 
 /// The domain-separated Schnorr signature type used for wallet message signing.
 type WalletSignature = SignatureWithDomain<WalletMessageSigningDomain>;

@@ -14,13 +14,6 @@ use tari_transaction_components::key_manager::{
     SecretTransactionKeyManagerInterface, TransactionKeyManagerInterface,
 };
 
-/// Frozen Dart-visible signing-error strings. Once shipped these are part of the
-/// public contract — changing the wording is a breaking change.
-pub(crate) const MALFORMED_SIG_FORMAT: &str =
-    "signature must be in '<signature_hex>|<public_nonce_hex>' format";
-pub(crate) const INVALID_SIG_COMPONENT: &str = "invalid signature component";
-pub(crate) const INVALID_NONCE_COMPONENT: &str = "invalid public nonce";
-
 /// Verify a `"<signature_hex>|<public_nonce_hex>"` signature over `message` against
 /// the public spend key in the base58 Tari `address`.
 ///
@@ -62,6 +55,9 @@ mod tests {
 
     use super::*;
     use crate::domain::address::construct_wallet_address_details;
+    use crate::domain::signing::{
+        INVALID_NONCE_COMPONENT, INVALID_SIG_COMPONENT, MALFORMED_SIG_FORMAT,
+    };
     use tari_common::configuration::Network;
     use tari_common_types::seeds::cipher_seed::CipherSeed;
     use tari_common_types::seeds::mnemonic::{Mnemonic, MnemonicLanguage};
