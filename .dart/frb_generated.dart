@@ -13,6 +13,7 @@ import 'api/network.dart';
 import 'api/scanner.dart';
 import 'api/seeds.dart';
 import 'api/send_transaction.dart';
+import 'api/signing.dart';
 import 'api/transactions.dart';
 import 'api/utils.dart';
 import 'api/wallet.dart';
@@ -80,7 +81,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1934012936;
+  int get rustContentHash => -507429643;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -169,6 +170,11 @@ abstract class RustLibApi extends BaseApi {
       {required ScanConfiguration config});
 
   Future<void> crateApiScannerStopScan();
+
+  Future<bool> crateApiSigningVerifyMessage(
+      {required String message,
+      required String signature,
+      required String address});
 
   RustArcIncrementStrongCountFnType
       get rust_arc_increment_strong_count_SensitiveSeeds;
@@ -866,6 +872,36 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiScannerStopScanConstMeta => const TaskConstMeta(
         debugName: "stop_scan",
         argNames: [],
+      );
+
+  @override
+  Future<bool> crateApiSigningVerifyMessage(
+      {required String message,
+      required String signature,
+      required String address}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(message, serializer);
+        sse_encode_String(signature, serializer);
+        sse_encode_String(address, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 26, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_bool,
+        decodeErrorData: sse_decode_AnyhowException,
+      ),
+      constMeta: kCrateApiSigningVerifyMessageConstMeta,
+      argValues: [message, signature, address],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSigningVerifyMessageConstMeta =>
+      const TaskConstMeta(
+        debugName: "verify_message",
+        argNames: ["message", "signature", "address"],
       );
 
   RustArcIncrementStrongCountFnType
