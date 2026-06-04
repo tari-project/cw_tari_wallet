@@ -181,4 +181,63 @@ mod tests {
             "got: {err}"
         );
     }
+
+    /// A parseable mainnet address from a fixed spend key, plus a valid signature
+    /// minted over that spend key. The two `signing`-component cases below reuse the
+    /// good halves so the address parses and the test reaches the hex-decode branch.
+    fn valid_address_and_signature(msg: &str) -> (String, String) {
+        let spend_sk = fixed_secret(11);
+        let view_sk = fixed_secret(7);
+        let spend_pk = CompressedPublicKey::from_secret_key(&spend_sk);
+        let details =
+            construct_wallet_address_details(spend_pk, view_sk, Network::MainNet).unwrap();
+        (details.tari_address, sign_for_test(&spend_sk, msg))
+    }
+
+    #[test]
+    fn signing_error_strings_are_frozen() {
+        // Pin the exact Dart-visible strings for each malformed-signature path, driven
+        // through the public `verify_message` so the test captures what Dart observes
+        // (the anyhow Display string). These are part of the frozen public contract;
+        // a wording change here is a breaking change.
+        let (address, sig) = valid_address_and_signature("m");
+        let (good_sig, good_nonce) = sig.split_once('|').expect("minted sig has one separator");
+
+        let bad_format = verify_message("m".into(), "no-pipe".into(), address.clone())
+            .expect_err("missing separator must error");
+        assert_eq!(
+            bad_format.to_string(),
+            "Signing Error: signature must be in '<signature_hex>|<public_nonce_hex>' format"
+        );
+
+        let bad_sig = verify_message("m".into(), format!("zz|{good_nonce}"), address.clone())
+            .expect_err("bad scalar hex must error");
+        assert_eq!(
+            bad_sig.to_string(),
+            "Signing Error: invalid signature component"
+        );
+
+        let bad_nonce = verify_message("m".into(), format!("{good_sig}|zz"), address)
+            .expect_err("bad nonce hex must error");
+        assert_eq!(bad_nonce.to_string(), "Signing Error: invalid public nonce");
+
+        // Second guard: the constants equal their frozen literals directly.
+        assert_eq!(
+            MALFORMED_SIG_FORMAT,
+            "signature must be in '<signature_hex>|<public_nonce_hex>' format"
+        );
+        assert_eq!(INVALID_SIG_COMPONENT, "invalid signature component");
+        assert_eq!(INVALID_NONCE_COMPONENT, "invalid public nonce");
+    }
+
+    #[test]
+    fn malformed_address_error_shape_is_frozen() {
+        // A bad address errors before any signature parsing, with the frozen prefix.
+        let err = verify_message("m".into(), "a|b".into(), "definitely-not-base58".into())
+            .expect_err("malformed address must error");
+        assert!(
+            err.to_string().starts_with("Invalid Recipient Address: "),
+            "got: {err}"
+        );
+    }
 }
