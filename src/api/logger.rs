@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 const BYTES_PER_MB: u64 = 1_048_576;
 
+/// Logging verbosity, from `Error` (least) to `Trace` (most), or `Off`.
 #[frb]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
@@ -33,6 +34,8 @@ impl From<LogLevel> for LevelFilter {
     }
 }
 
+/// A per-module log-level override: log records whose `target` matches are
+/// filtered at `level` instead of the default.
 #[frb]
 #[derive(Clone, Debug)]
 pub struct LogModuleConfig {
@@ -40,6 +43,10 @@ pub struct LogModuleConfig {
     pub level: LogLevel,
 }
 
+/// Configuration for [`init_logger`].
+///
+/// `default_level` applies to all modules without a `module_levels` override;
+/// `max_file_size_mb` and `max_files` bound the rotating on-disk log.
 #[frb]
 #[derive(Clone, Debug)]
 pub struct LoggerConfig {
@@ -83,6 +90,12 @@ impl<'a, 'kvs> VisitSource<'kvs> for KvTextVisitor<'a> {
     }
 }
 
+/// Initialize the global logger, writing to a rotating file under `base_path/logs`
+/// and to stdout, and install a panic hook that logs Rust panics.
+///
+/// `base_path` is the directory to create the `logs/` subfolder in; `config`
+/// (`None` → sensible defaults) tunes levels and rotation. Call once at startup.
+/// Synchronous (`#[frb(sync)]`); errors if the logger cannot be installed.
 #[frb(sync)]
 pub fn init_logger(base_path: String, config: Option<LoggerConfig>) -> Result<()> {
     let config = config.unwrap_or_default();
@@ -148,4 +161,23 @@ pub fn init_logger(base_path: String, config: Option<LoggerConfig>) -> Result<()
     }));
     log::info!("Minotari Logger Initialized");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Enum-mapping tests. Pure conversions, no I/O. These are upstream-drift
+    //! tripwires: if `log::LevelFilter` changes, this must be revisited.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    #[test]
+    fn log_level_maps_to_level_filter_exhaustively() {
+        assert_eq!(LevelFilter::from(LogLevel::Error), LevelFilter::Error);
+        assert_eq!(LevelFilter::from(LogLevel::Warn), LevelFilter::Warn);
+        assert_eq!(LevelFilter::from(LogLevel::Info), LevelFilter::Info);
+        assert_eq!(LevelFilter::from(LogLevel::Debug), LevelFilter::Debug);
+        assert_eq!(LevelFilter::from(LogLevel::Trace), LevelFilter::Trace);
+        assert_eq!(LevelFilter::from(LogLevel::Off), LevelFilter::Off);
+    }
 }

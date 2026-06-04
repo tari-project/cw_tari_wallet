@@ -1,0 +1,61 @@
+[package]
+name = "verify"
+version = "0.1.0"
+edition = "2021"
+# Internal verification harness; never published.
+publish = false
+
+# The Tier C non-interactive scenario runner. Tiers A/B live under `tests/`.
+[[bin]]
+name = "verify"
+path = "src/main.rs"
+
+[features]
+# Tier C (live testnet smoke) is opt-in only: it requires a live esmeralda base
+# node and a CI-secret test wallet, so it must NEVER run on PRs. Building the
+# `verify` bin's live scenarios is gated behind this feature; without it the bin
+# still builds and prints how to enable Tier C.
+live-e2e = []
+
+[dependencies]
+# The library under test — its EXACT public API is what the harness exercises.
+# Path dependency (workspace member), so it can never drift from what CI builds
+# and there is no divergent dependency pin.
+rust_lib_flutter_rust_wallet = { path = ".." }
+
+# Used by the fixture recorder to seed deterministic wallet rows (balance
+# changes + a displayed transaction) directly into the SQLite DB via the same
+# minotari db layer the library uses. Inherits the workspace's single resolved
+# version of every tari_* crate — no separate `tari_common_types` git pin.
+minotari-wallet = { package = "minotari", git = "https://github.com/tari-project/minotari-cli.git", rev = "52a7287a3fe1e7831855649c530534af9f2d4830" }
+tari_common = { version = "5.3.1-pre.0" }
+tari_common_types = { version = "5.3.1-pre.0" }
+tari_crypto = "0.23.0"
+tari_transaction_components = { version = "5.3.1-pre.0" }
+tari_utilities = "0.10.0"
+
+anyhow = "1.0.100"
+chrono = "0.4.42"
+# `accumulated_difficulty` in the recorded ChainMetadata is a U512 (hex-string in
+# JSON). Same version the tari_* crates resolve to.
+primitive-types = "0.12.2"
+# Same DB stack the library uses, so the recorder seeds the fixture through the
+# exact connection/pool types — and the SAME resolved `rusqlite` (0.37, bundled).
+r2d2 = "0.8.10"
+r2d2_sqlite = "0.31.0"
+rusqlite = { version = "0.37", features = ["bundled", "chrono", "uuid", "serde_json"] }
+serde_json = "1"
+tokio = { version = "1.47.1", features = ["full"] }
+# Temp DBs for `materialize_fixture_db` and the Tier C live runner.
+tempfile = "3"
+# Tier C zeroizes the live seed/passphrase in memory (per the secret-handling convention).
+zeroize = "1"
+
+[dev-dependencies]
+# Tier A snapshot assertions: pin the SHAPE + CONTENT of every returned DTO so a
+# contract-affecting change to a public struct/enum is caught (complements the
+# bridge zero-diff guard). `insta` runs hermetically with committed `.snap` files.
+insta = { version = "1.40", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+# Tier B: a local mock HTTP server the network APIs are pointed at via `base_url`.
+wiremock = "0.6"

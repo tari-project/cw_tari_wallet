@@ -2,8 +2,13 @@ use anyhow::{Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::http::WalletHttpClient;
 use tari_common_types::chain_metadata::ChainMetadata;
+use tari_transaction_components::rpc::models::TipInfoResponse;
 use tari_utilities::hex::Hex;
 
+/// A snapshot of the base node's chain tip, as reported over its HTTP RPC.
+///
+/// Returned by [`get_tip_info`]. All heights are block counts and `timestamp`
+/// is seconds since the Unix epoch.
 #[frb]
 #[derive(Clone, Debug)]
 pub struct TipInfo {
@@ -45,18 +50,39 @@ impl From<ChainMetadata> for TipInfo {
     }
 }
 
-pub async fn get_tip_info(base_url: String) -> Result<Option<TipInfo>> {
+/// Connect to the base node at `base_url` and fetch its raw tip-info response over
+/// HTTP RPC. Shared by [`get_tip_info`] and [`is_node_synced`] so the
+/// parse → connect → fetch sequence (and its error strings) live in one place.
+async fn fetch_tip_info(base_url: String) -> Result<TipInfoResponse> {
     let base_url = base_url.parse().context("Failed to parse base URL")?;
     let wallet_client = WalletHttpClient::new(base_url)?;
+    wallet_client.get_tip_info().await
+}
 
-    let tip_info = wallet_client.get_tip_info().await?;
+/// Fetch the base node's current chain tip over HTTP RPC.
+///
+/// `base_url` is the base node RPC endpoint (e.g. `https://rpc.tari.com`).
+/// Returns `Ok(None)` when the node reports no chain metadata yet; `Ok(Some(_))`
+/// otherwise.
+///
+/// Async; performs network I/O. Errors if `base_url` cannot be parsed or the RPC
+/// request fails. Part of the frozen public contract (ledger D2) even though it
+/// has no explicit `#[frb]`: FRB v2 exports every `pub` item in `crate::api`.
+pub async fn get_tip_info(base_url: String) -> Result<Option<TipInfo>> {
+    let tip_info = fetch_tip_info(base_url).await?;
     Ok(tip_info.metadata.map(Into::into))
 }
 
+/// Report whether the base node at `base_url` considers itself synced to the
+/// network tip.
+///
+/// `base_url` is the base node RPC endpoint. Returns the node's own `is_synced`
+/// flag from its tip-info response.
+///
+/// Async; performs network I/O. Errors if `base_url` cannot be parsed or the RPC
+/// request fails. Part of the frozen public contract (ledger D2) even though it
+/// has no explicit `#[frb]`.
 pub async fn is_node_synced(base_url: String) -> Result<bool> {
-    let base_url = base_url.parse().context("Failed to parse base URL")?;
-    let wallet_client = WalletHttpClient::new(base_url)?;
-
-    let tip_info = wallet_client.get_tip_info().await?;
+    let tip_info = fetch_tip_info(base_url).await?;
     Ok(tip_info.is_synced)
 }

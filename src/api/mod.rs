@@ -1,7 +1,9 @@
 pub mod address;
 pub mod balance;
 pub mod base_node;
+pub mod config;
 pub mod db;
+pub mod error;
 pub mod fee;
 pub mod logger;
 pub mod network;

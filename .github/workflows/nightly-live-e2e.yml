@@ -1,0 +1,55 @@
+name: Nightly live-e2e (Tier C)
+
+# Tier C — opt-in, GATED live-testnet smoke. This NEVER runs on pull
+# requests: it needs a live esmeralda base node and a dedicated, minimally-funded
+# test wallet whose secrets live in CI secrets. It runs on a nightly schedule (and
+# can be triggered manually) so a real end-to-end regression is caught without
+# making PRs slow/flaky. esmeralda is slow/flaky, so this job tolerates failure
+# being a signal rather than a merge gate.
+on:
+  # DISABLED: the nightly schedule is intentionally turned off until we have a
+  # live esmeralda base node and a dedicated, minimally-funded test wallet with
+  # secrets configured in CI. Re-enable by uncommenting the schedule block below.
+  #
+  # schedule:
+  #   # 03:17 UTC daily (off the top of the hour to avoid scheduler contention).
+  #   - cron: "17 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-live-e2e
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  live-e2e:
+    name: Tier C live smoke
+    runs-on: ubuntu-latest
+    # Only run on the canonical repo, never on forks (which lack the secrets).
+    if: github.repository_owner != ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # `minotari_app_grpc` (transitive `minotari` dep) compiles `.proto` files
+      # in its build script and requires the Protocol Buffers compiler.
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Run Tier C live scenarios
+        env:
+          # Secrets live in repo/organization CI secrets — never committed, never
+          # interactive. The runner zeroizes them in memory (secret-handling convention).
+          VERIFY_BASE_URL: ${{ secrets.VERIFY_BASE_URL }}
+          VERIFY_SEED_WORDS: ${{ secrets.VERIFY_SEED_WORDS }}
+          VERIFY_PASSPHRASE: ${{ secrets.VERIFY_PASSPHRASE }}
+          VERIFY_WALLET_NAME: ${{ secrets.VERIFY_WALLET_NAME }}
+          VERIFY_MIN_TX_COUNT: ${{ secrets.VERIFY_MIN_TX_COUNT }}
+        run: |
+          if [ -z "${VERIFY_BASE_URL}" ] || [ -z "${VERIFY_SEED_WORDS}" ]; then
+            echo "::warning::Tier C secrets are not configured; skipping live smoke."
+            exit 0
+          fi
+          cargo run -p verify --features live-e2e -- live

@@ -1,0 +1,10 @@
+---
+source: verify/tests/tier_a_fixture_replay.rs
+expression: "AccountBalanceSnapshot::from(&balance)"
+---
+{
+  "total": 6500000,
+  "unconfirmed": 0,
+  "locked": 0,
+  "available": 6500000
+}

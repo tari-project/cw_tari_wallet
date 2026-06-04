@@ -1,0 +1,6 @@
+# The Tier A fixture wallet is a committed SQLite snapshot for inspection
+# (see verify/fixtures/README.md). Treat it as binary so git never attempts a text
+# diff/merge on it.
+verify/fixtures/*.db binary
+verify/fixtures/*.db-wal binary
+verify/fixtures/*.db-shm binary
