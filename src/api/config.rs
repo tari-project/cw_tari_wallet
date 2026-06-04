@@ -30,6 +30,13 @@ pub(crate) const SECONDS_TO_LOCK_UTXO: u64 = 60 * 60 * 24;
 /// Default number of outputs assumed for fee estimation.
 pub(crate) const DEFAULT_NUM_OUTPUTS: usize = 1;
 
+/// Response timeout (seconds) for the `check_node_health` probe. Short so a dead
+/// node fails fast.
+pub(crate) const HEALTH_TIMEOUT_SECS: u64 = 5;
+
+/// Retry attempts for the `check_node_health` probe. Low for a snappy result.
+pub(crate) const HEALTH_MAX_RETRIES: u32 = 1;
+
 #[cfg(test)]
 mod tests {
     //! Value-pinning guards (Shared Contracts §4). These assert the *resolved* default
@@ -64,5 +71,15 @@ mod tests {
     #[test]
     fn default_num_outputs_is_one() {
         assert_eq!(DEFAULT_NUM_OUTPUTS, 1);
+    }
+
+    #[test]
+    fn health_timeout_secs_is_five() {
+        assert_eq!(HEALTH_TIMEOUT_SECS, 5);
+    }
+
+    #[test]
+    fn health_max_retries_is_one() {
+        assert_eq!(HEALTH_MAX_RETRIES, 1);
     }
 }
