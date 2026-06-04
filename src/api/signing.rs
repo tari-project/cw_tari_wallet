@@ -46,6 +46,7 @@ pub fn verify_message(message: String, signature: String, address: String) -> Re
 /// published address. View-only wallets have no mnemonic and cannot sign (guarded
 /// Dart-side); an invalid word list errors as `Invalid Seed Words`.
 pub fn sign_message(message: String, seed_words: Vec<String>) -> Result<String> {
+    let seed_words = zeroize::Zeroizing::new(seed_words);
     let key_manager = key_manager_from_seed_words(&seed_words)?;
     let spend = key_manager.get_spend_key();
     let secret: PrivateKey = key_manager
