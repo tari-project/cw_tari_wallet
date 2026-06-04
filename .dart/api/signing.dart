@@ -18,3 +18,16 @@ Future<bool> verifyMessage(
         required String address}) =>
     RustLib.instance.api.crateApiSigningVerifyMessage(
         message: message, signature: signature, address: address);
+
+/// Sign `message` with the wallet's spend secret, returning a domain-separated
+/// Ristretto Schnorr signature as `"<signature_hex>|<public_nonce_hex>"`.
+///
+/// Off-chain: no node, fee, or transaction — nothing is broadcast. The spend secret
+/// is derived from the 24-word `seed_words` via the same factory used by wallet
+/// creation and `send_transaction`, so it matches the spend key in the wallet's
+/// published address. View-only wallets have no mnemonic and cannot sign (guarded
+/// Dart-side); an invalid word list errors as `Invalid Seed Words`.
+Future<String> signMessage(
+        {required String message, required List<String> seedWords}) =>
+    RustLib.instance.api
+        .crateApiSigningSignMessage(message: message, seedWords: seedWords);

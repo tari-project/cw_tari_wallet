@@ -81,7 +81,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -507429643;
+  int get rustContentHash => 10312603;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -165,6 +165,9 @@ abstract class RustLibApi extends BaseApi {
 
   Stream<SendTransactionEvent> crateApiSendTransactionSendTransaction(
       {required SendTransactionDetails details});
+
+  Future<String> crateApiSigningSignMessage(
+      {required String message, required List<String> seedWords});
 
   Stream<ScanEventDto> crateApiScannerStartScan(
       {required ScanConfiguration config});
@@ -824,6 +827,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiSigningSignMessage(
+      {required String message, required List<String> seedWords}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(message, serializer);
+        sse_encode_list_String(seedWords, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 24, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_AnyhowException,
+      ),
+      constMeta: kCrateApiSigningSignMessageConstMeta,
+      argValues: [message, seedWords],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSigningSignMessageConstMeta => const TaskConstMeta(
+        debugName: "sign_message",
+        argNames: ["message", "seedWords"],
+      );
+
+  @override
   Stream<ScanEventDto> crateApiScannerStartScan(
       {required ScanConfiguration config}) {
     final sink = RustStreamSink<ScanEventDto>();
@@ -833,7 +862,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_StreamSink_scan_event_dto_Sse(sink, serializer);
         sse_encode_box_autoadd_scan_configuration(config, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 24, port: port_);
+            funcId: 25, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -857,7 +886,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 25, port: port_);
+            funcId: 26, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -886,7 +915,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(signature, serializer);
         sse_encode_String(address, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 26, port: port_);
+            funcId: 27, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_bool,

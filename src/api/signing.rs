@@ -5,9 +5,14 @@
 //! Dart-visible representation. The pure crypto lives in `domain`.
 
 use crate::api::error::WalletError;
+use crate::domain::keys::key_manager_from_seed_words;
 use crate::domain::signing as domain_signing;
 use anyhow::Result;
 use tari_common_types::tari_address::TariAddress;
+use tari_common_types::types::PrivateKey;
+use tari_transaction_components::key_manager::{
+    SecretTransactionKeyManagerInterface, TransactionKeyManagerInterface,
+};
 
 /// Frozen Dart-visible signing-error strings. Once shipped these are part of the
 /// public contract — changing the wording is a breaking change.
@@ -32,6 +37,23 @@ pub fn verify_message(message: String, signature: String, address: String) -> Re
     Ok(domain_signing::verify(&public_key, &message, &signature)?)
 }
 
+/// Sign `message` with the wallet's spend secret, returning a domain-separated
+/// Ristretto Schnorr signature as `"<signature_hex>|<public_nonce_hex>"`.
+///
+/// Off-chain: no node, fee, or transaction — nothing is broadcast. The spend secret
+/// is derived from the 24-word `seed_words` via the same factory used by wallet
+/// creation and `send_transaction`, so it matches the spend key in the wallet's
+/// published address. View-only wallets have no mnemonic and cannot sign (guarded
+/// Dart-side); an invalid word list errors as `Invalid Seed Words`.
+pub fn sign_message(message: String, seed_words: Vec<String>) -> Result<String> {
+    let key_manager = key_manager_from_seed_words(&seed_words)?;
+    let spend = key_manager.get_spend_key();
+    let secret: PrivateKey = key_manager
+        .get_private_key(&spend.key_id)
+        .map_err(|e| WalletError::signing(e.to_string()))?;
+    Ok(domain_signing::sign(&secret, &message)?)
+}
+
 #[cfg(test)]
 mod tests {
     //! Adapter-level tests — keys minted in-test, no DB/network/globals.
@@ -40,6 +62,8 @@ mod tests {
     use super::*;
     use crate::domain::address::construct_wallet_address_details;
     use tari_common::configuration::Network;
+    use tari_common_types::seeds::cipher_seed::CipherSeed;
+    use tari_common_types::seeds::mnemonic::{Mnemonic, MnemonicLanguage};
     use tari_common_types::types::{CompressedPublicKey, PrivateKey, SignatureWithDomain};
     use tari_crypto::ristretto::RistrettoSecretKey;
     use tari_hashing::WalletMessageSigningDomain;
@@ -63,6 +87,31 @@ mod tests {
             sig.get_signature().to_hex(),
             sig.get_public_nonce().to_hex()
         )
+    }
+
+    /// A valid 24-word mnemonic from a fresh random `CipherSeed`. Stable within a
+    /// single test call; never a real funded seed.
+    fn random_seed_words() -> Vec<String> {
+        let seed = CipherSeed::random();
+        let mnemonic = seed
+            .to_mnemonic(MnemonicLanguage::English, None)
+            .expect("a random cipher seed must produce a valid mnemonic");
+        mnemonic
+            .join(" ")
+            .reveal()
+            .split_whitespace()
+            .map(|w| w.to_string())
+            .collect()
+    }
+
+    /// Derive the base58 address whose spend key matches the wallet's spend secret.
+    fn address_for_words(words: &[String]) -> String {
+        let km = key_manager_from_seed_words(words).expect("valid mnemonic derives a key manager");
+        let spend_pk = km.get_spend_key().pub_key;
+        let view_sk = km.get_private_view_key();
+        construct_wallet_address_details(spend_pk, view_sk, Network::MainNet)
+            .expect("address construction succeeds")
+            .tari_address
     }
 
     #[test]
@@ -91,5 +140,45 @@ mod tests {
         let msg = "verify me";
         let sig = sign_for_test(&spend_sk, msg);
         assert!(verify_message(msg.into(), sig, details.tari_address).unwrap());
+    }
+
+    #[test]
+    fn sign_then_verify_round_trips_via_public_api() {
+        let words = random_seed_words();
+        let address = address_for_words(&words);
+
+        let sig = sign_message("hello".into(), words).unwrap();
+        assert!(verify_message("hello".into(), sig, address).unwrap());
+    }
+
+    #[test]
+    fn tampered_message_verifies_false() {
+        let words = random_seed_words();
+        let address = address_for_words(&words);
+
+        let sig = sign_message("hello".into(), words).unwrap();
+        // Different message under the same (valid) signature must verify false.
+        assert!(!verify_message("HELLO".into(), sig, address).unwrap());
+    }
+
+    #[test]
+    fn wrong_signer_address_verifies_false() {
+        let words_a = random_seed_words();
+        let words_b = random_seed_words();
+        let address_b = address_for_words(&words_b);
+
+        let sig = sign_message("hello".into(), words_a).unwrap();
+        // Signed by wallet A, verified against wallet B's address -> false.
+        assert!(!verify_message("hello".into(), sig, address_b).unwrap());
+    }
+
+    #[test]
+    fn invalid_mnemonic_is_invalid_seed_words() {
+        let words = vec!["not".to_string(), "a".to_string(), "mnemonic".to_string()];
+        let err = sign_message("m".into(), words).expect_err("garbage mnemonic must error");
+        assert!(
+            err.to_string().starts_with("Invalid Seed Words: "),
+            "got: {err}"
+        );
     }
 }

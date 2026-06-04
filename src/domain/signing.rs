@@ -7,6 +7,7 @@
 
 use crate::api::error::WalletError;
 use crate::api::signing::{INVALID_NONCE_COMPONENT, INVALID_SIG_COMPONENT, MALFORMED_SIG_FORMAT};
+use rand::rng;
 use tari_common_types::types::{PrivateKey, SignatureWithDomain, UncompressedPublicKey};
 use tari_crypto::ristretto::RistrettoPublicKey;
 use tari_hashing::WalletMessageSigningDomain;
@@ -14,6 +15,21 @@ use tari_utilities::hex::Hex;
 
 /// The domain-separated Schnorr signature type used for wallet message signing.
 type WalletSignature = SignatureWithDomain<WalletMessageSigningDomain>;
+
+/// Sign `message` with `secret`, returning `"<sig_hex>|<nonce_hex>"`.
+///
+/// Random-nonce Schnorr: two calls over the same message produce different
+/// signatures, both valid.
+pub(crate) fn sign(secret: &PrivateKey, message: &str) -> Result<String, WalletError> {
+    let sig = WalletSignature::sign(secret, message.as_bytes(), &mut rng())
+        .map_err(|e| WalletError::signing(e.to_string()))?;
+    // Scalar first, nonce second — the reverse of `new(public_nonce, signature)`.
+    Ok(format!(
+        "{}|{}",
+        sig.get_signature().to_hex(),
+        sig.get_public_nonce().to_hex(),
+    ))
+}
 
 /// Split `"<sig_hex>|<nonce_hex>"` into its two hex halves; errs unless there are
 /// exactly two `|`-separated parts (`split_once` would wrongly accept `"a|b|c"`).
@@ -47,9 +63,8 @@ pub(crate) fn verify(
 
 #[cfg(test)]
 mod tests {
-    //! Pure verification tests — fixed/random keys minted in-test, no DB, no network,
-    //! no globals. Signatures are minted by calling `tari_crypto` directly so this
-    //! module needs no public signer.
+    //! Pure sign/verify tests — fixed/random keys minted in-test, no DB, no network,
+    //! no globals.
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
@@ -59,13 +74,7 @@ mod tests {
 
     /// Mint a real signature over `msg` with `secret`, serialized as the wire string.
     fn sign_for_test(secret: &PrivateKey, msg: &str) -> String {
-        let sig =
-            WalletSignature::sign(secret, msg.as_bytes(), &mut rand::rng()).expect("signing works");
-        format!(
-            "{}|{}",
-            sig.get_signature().to_hex(),
-            sig.get_public_nonce().to_hex()
-        )
+        sign(secret, msg).expect("signing works")
     }
 
     /// A fixed secret key from small canonical scalar bytes.
@@ -150,5 +159,25 @@ mod tests {
         let bad_nonce =
             verify(&public, "m", &format!("{good_sig}|zz")).expect_err("bad nonce hex must error");
         assert_eq!(bad_nonce.to_string(), "Signing Error: invalid public nonce");
+    }
+
+    #[test]
+    fn sign_output_shape_is_two_hex_halves() {
+        let secret = fixed_secret(11);
+        let out = sign(&secret, "m").unwrap();
+
+        let parts: Vec<&str> = out.split('|').collect();
+        assert_eq!(parts.len(), 2, "expected exactly one separator, got: {out}");
+        // 32-byte scalar and 32-byte compressed point -> 64 lowercase hex chars each.
+        for half in &parts {
+            assert_eq!(half.len(), 64, "half must be 64 hex chars: {half}");
+            assert!(
+                half.chars().all(|c| c.is_ascii_hexdigit()),
+                "half must be valid hex: {half}"
+            );
+        }
+        // Each half round-trips through the matching tari type.
+        PrivateKey::from_hex(parts[0]).expect("scalar half is valid private-key hex");
+        UncompressedPublicKey::from_hex(parts[1]).expect("nonce half is valid public-key hex");
     }
 }
