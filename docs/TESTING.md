@@ -46,6 +46,7 @@ alongside the colocated unit tests. The suite must stay green and hermetic.
 | `api/transactions.rs` | `From` for `DisplayedTransactionDirection` (2), `DisplayedTransactionSource` (4), `DisplayedTransactionStatus` (7) — all variants. | Upstream-drift tripwires for the `minotari` transaction enums. |
 | `api/send_transaction.rs` | `validate_inputs`: rejects zero amount, rejects malformed recipient, accepts a good fixture, applies the `DEFAULT_CONFIRMATION_WINDOW` (3) default, and honours an explicit window. | Input validation is pure (no DB/network) and gates every send. |
 | `api/base_node.rs` | `check_node_health`: an unparseable `base_url` returns `Ok(false)` (never `Err`); reachability itself is `is_online`, covered hermetically by the Tier-B harness. `api/config.rs` value-guards pin `HEALTH_TIMEOUT_SECS` (5) and `HEALTH_MAX_RETRIES` (1). | The probe must map to a plain Dart `bool`; a bad URL is "not healthy", not an error. Pinned timeout/retry are the snappy "test connection" UX. |
+| `api/signing.rs` + `domain/signing.rs` | sign/verify round-trip, tamper/wrong-key → false, malformed-input error strings, random-nonce non-determinism, frozen domain tag, reference cross-compat vector. | Off-chain message signing; pure crypto; the error strings + domain tag are frozen contract. |
 
 ## Contract-guard tests (do not flip without coordination)
 
@@ -67,6 +68,20 @@ test.
   `From` impl and the test together.
 - **`send_transaction.rs::validate_inputs` tests** — encode the accept/reject and
   default-window behavior of the validation gate.
+- **`signing.rs::signing_error_strings_are_frozen`** — the three Dart-visible signing
+  error strings (`signature must be in '<signature_hex>|<public_nonce_hex>' format`,
+  `invalid signature component`, `invalid public nonce`), driven through the public
+  `verify_message`. These ship as frozen contract; changing the wording is breaking.
+- **`signing.rs::wallet_message_signing_domain_tag_is_frozen`** — pins the
+  `"com.tari.base_layer.wallet.message_signing"` tag (and version `1`). An upstream
+  `tari_hashing` change to the tag would silently break cross-wallet verification; this
+  is the drift tripwire.
+- **`signing.rs::verifies_reference_tari_signature`** — a cross-wallet interop vector
+  asserting a known `message`/`address`/`<sig_hex>|<nonce_hex>` triple verifies true.
+  The triple is currently **self-generated** by this crate (not yet captured from an
+  external reference binary), but it shares the exact `tari_crypto`/`tari_hashing` sign
+  path with the canonical Tari wallet; executing it against a running reference binary
+  is an unverified follow-up.
 
 ## Intentionally not tested yet (and why)
 

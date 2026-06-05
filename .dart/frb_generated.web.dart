@@ -16,6 +16,7 @@ import 'api/network.dart';
 import 'api/scanner.dart';
 import 'api/seeds.dart';
 import 'api/send_transaction.dart';
+import 'api/signing.dart';
 import 'api/transactions.dart';
 import 'api/utils.dart';
 import 'api/wallet.dart';
