@@ -1,9 +1,13 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::http::WalletHttpClient;
 use tari_common_types::chain_metadata::ChainMetadata;
 use tari_transaction_components::rpc::models::TipInfoResponse;
 use tari_utilities::hex::Hex;
+
+use crate::api::config::{HEALTH_MAX_RETRIES, HEALTH_TIMEOUT_SECS};
 
 /// A snapshot of the base node's chain tip, as reported over its HTTP RPC.
 ///
@@ -85,4 +89,45 @@ pub async fn get_tip_info(base_url: String) -> Result<Option<TipInfo>> {
 pub async fn is_node_synced(base_url: String) -> Result<bool> {
     let tip_info = fetch_tip_info(base_url).await?;
     Ok(tip_info.is_synced)
+}
+
+/// Probe whether the base node at `base_url` is reachable (a `GET /get_tip_info`
+/// round-trip succeeds). Liveness only, not sync status (use [`is_node_synced`]).
+///
+/// Returns `Ok(false)` — never `Err` — on parse failure, client construction
+/// failure, unreachable node, or timeout, so Dart's `checkNodeHealth()` maps to
+/// a plain `bool` with no `try`/`catch`. Uses a short timeout for snappy "test
+/// connection" UX. Part of the frozen public contract (ledger D2) even though it
+/// has no explicit `#[frb]`.
+pub async fn check_node_health(base_url: String) -> Result<bool> {
+    let url = match base_url.parse() {
+        Ok(url) => url,
+        // Bad URL is "not healthy", not an error: keep the Dart mapping a plain bool.
+        Err(_) => return Ok(false),
+    };
+    let client = match WalletHttpClient::with_config(
+        url,
+        HEALTH_MAX_RETRIES,
+        Duration::from_secs(HEALTH_TIMEOUT_SECS),
+    ) {
+        Ok(client) => client,
+        // Client construction failure (e.g. TLS backend init) means no node can be
+        // probed at all: report "not healthy" rather than throwing into Dart.
+        Err(_) => return Ok(false),
+    };
+    // is_online maps Ok => true, Err (unreachable/timeout) => false.
+    Ok(client.is_online().await)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+    use super::*;
+
+    // Bad URL answers Ok(false), not Err; parse fails before any network call.
+    #[tokio::test]
+    async fn check_node_health_unparseable_url_is_false_not_err() {
+        let result = check_node_health("not a url".to_string()).await;
+        assert!(!result.unwrap());
+    }
 }

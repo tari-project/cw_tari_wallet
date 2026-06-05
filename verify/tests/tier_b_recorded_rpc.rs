@@ -9,7 +9,9 @@
 //! No real base node, fully deterministic. `make record-fixtures` refreshes the
 //! committed captures if the upstream RPC shape changes.
 
-use rust_lib_flutter_rust_wallet::api::base_node::{get_tip_info, is_node_synced};
+use rust_lib_flutter_rust_wallet::api::base_node::{
+    check_node_health, get_tip_info, is_node_synced,
+};
 use verify::fixture::rpc;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -67,5 +69,29 @@ async fn is_node_synced_reads_the_synced_flag() {
             .await
             .expect("is_node_synced (unsynced)"),
         "unsynced capture must report is_synced = false"
+    );
+}
+
+#[tokio::test]
+async fn check_node_health_true_when_node_reachable() {
+    // Reachable node: /get_tip_info answers 200, so health is true even if unsynced.
+    let server = mock_node(rpc::SYNCED_FILE).await;
+    assert!(
+        check_node_health(server.uri())
+            .await
+            .expect("check_node_health must not error on a reachable node"),
+        "a reachable node must report healthy = true"
+    );
+}
+
+#[tokio::test]
+async fn check_node_health_false_when_node_unreachable() {
+    // No route mounted: requests 404 -> RPC error -> false, never Err.
+    let server = MockServer::start().await;
+    assert!(
+        !check_node_health(server.uri())
+            .await
+            .expect("check_node_health must answer false, not Err, on failure"),
+        "an unreachable node must report healthy = false"
     );
 }

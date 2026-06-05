@@ -33,6 +33,17 @@ Future<TipInfo?> getTipInfo({required String baseUrl}) =>
 Future<bool> isNodeSynced({required String baseUrl}) =>
     RustLib.instance.api.crateApiBaseNodeIsNodeSynced(baseUrl: baseUrl);
 
+/// Probe whether the base node at `base_url` is reachable (a `GET /get_tip_info`
+/// round-trip succeeds). Liveness only, not sync status (use [`is_node_synced`]).
+///
+/// Returns `Ok(false)` — never `Err` — on parse failure, client construction
+/// failure, unreachable node, or timeout, so Dart's `checkNodeHealth()` maps to
+/// a plain `bool` with no `try`/`catch`. Uses a short timeout for snappy "test
+/// connection" UX. Part of the frozen public contract (ledger D2) even though it
+/// has no explicit `#[frb]`.
+Future<bool> checkNodeHealth({required String baseUrl}) =>
+    RustLib.instance.api.crateApiBaseNodeCheckNodeHealth(baseUrl: baseUrl);
+
 /// A snapshot of the base node's chain tip, as reported over its HTTP RPC.
 ///
 /// Returned by [`get_tip_info`]. All heights are block counts and `timestamp`
