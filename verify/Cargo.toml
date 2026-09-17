@@ -27,11 +27,11 @@ rust_lib_flutter_rust_wallet = { path = ".." }
 # changes + a displayed transaction) directly into the SQLite DB via the same
 # minotari db layer the library uses. Inherits the workspace's single resolved
 # version of every tari_* crate — no separate `tari_common_types` git pin.
-minotari-wallet = { package = "minotari", git = "https://github.com/tari-project/minotari-cli.git", rev = "52a7287a3fe1e7831855649c530534af9f2d4830" }
-tari_common = { version = "5.3.1-pre.0" }
-tari_common_types = { version = "5.3.1-pre.0" }
+minotari-wallet = { package = "minotari", git = "https://github.com/tari-project/minotari-cli.git", rev = "af78477479166e21c7fb98d0e7d8d5b28d70c903" }
+tari_common = { version = "5.7.0-pre.8" }
+tari_common_types = { version = "5.7.0-pre.8" }
 tari_crypto = "0.23.0"
-tari_transaction_components = { version = "5.3.1-pre.0" }
+tari_transaction_components = { version = "5.7.0-pre.8" }
 tari_utilities = "0.10.0"
 
 anyhow = "1.0.100"

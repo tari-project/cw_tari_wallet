@@ -179,7 +179,7 @@ the frozen contract. Never bypass it on a dependency PR.
   reusable library — so the lockfile is the reproducible-build record, not noise to
   be ignored. A reusable library would `.gitignore` it; we must not.
 - `minotari` is pinned by **git rev**; `tari_common` / `tari_common_types` /
-  `tari_transaction_components` are pinned to `5.3.1-pre.0` pre-releases;
+  `tari_transaction_components` are pinned to `5.7.0-pre.8` pre-releases;
   `flutter_rust_bridge` is pinned **exactly** `=2.11.1`.
 
 ### FRB runtime ↔ codegen CLI lockstep
@@ -213,11 +213,19 @@ process is:
    guard rail — `cargo test --all-features` must stay green. If a mapping test
    would have to change, upstream changed a shape that flows into the contract:
    stop and treat it as a (forbidden) breaking change, not a test edit.
-4. Run the full gate, then `make gen` and confirm a **zero** `.dart/**` diff. A
-   non-empty `.dart/api/**` diff means the bump leaked a contract change — revert
-   or, only via a coordinated migration, promote to a MAJOR (see below).
+4. Run the full gate, then `make gen` and commit the regenerated bridge. What is
+   actually enforced is **no removed/renamed declaration line** under
+   `.dart/api/**` (`scripts/check_api_stability.sh`, see "How the CI guard works"),
+   not a byte-for-byte zero diff. A zero `.dart/**` diff is the common and
+   preferred outcome, but a bump can legitimately move *non-declaration* lines —
+   most often the `// These functions are ignored because they are not marked as
+   `pub`: …` comment block flutter_rust_bridge emits, which shifts whenever a
+   private helper or a trait impl is added or removed. Read the diff and confirm
+   every changed line is a comment; **any** changed or removed declaration line
+   (function, class/enum, field, variant) means the bump leaked a contract change —
+   revert, or promote to a MAJOR only via a coordinated migration (see below).
 
-Pre-release `tari_*` (`5.3.1-pre.0`) can change shape between pre-releases — never
+Pre-release `tari_*` (`5.7.0-pre.8`) can change shape between pre-releases — never
 auto-merge a `tari_*` bump.
 
 ### Dependency-update automation (Renovate)

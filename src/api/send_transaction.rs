@@ -196,10 +196,10 @@ fn create_transaction_sender(
 
     // The passphrase arrives in the frozen public `SendTransactionDetails.passphrase`
     // (plain `Option<String>`). Hold our local copy in a zeroizing container so it is
-    // wiped when this function returns (Shared Contracts §3). Note: `TransactionSender`
-    // takes an owned `String`, so the copy handed to it below (`password.to_string()`)
-    // is a non-zeroizing plaintext owned by the sender — its wiping is the upstream
-    // API's concern; we only minimize our own local exposure here.
+    // wiped when this function returns (Shared Contracts §3). `TransactionSender::new`
+    // now takes an owned `Zeroizing<String>`, so the container is *moved* into the
+    // sender end-to-end: there is no longer a non-zeroizing plaintext copy of the
+    // passphrase anywhere in the call chain.
     let password = Zeroizing::new(
         details
             .passphrase
@@ -210,7 +210,7 @@ fn create_transaction_sender(
     TransactionSender::new(
         db_pool,
         details.wallet_name.clone(),
-        password.to_string(),
+        password,
         network,
         confirmations,
     )

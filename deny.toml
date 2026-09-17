@@ -37,13 +37,17 @@ yanked = "warn"
 # `rustls-webpki` 0.103.8 -> 0.103.13) and removed from this list. Re-run
 # `cargo deny check advisories` after any dependency bump and prune any entry
 # that a fix has made unnecessary.
+#
+# NOTE: the `minotari` af78477 / `tari_*` 5.7.0-pre.8 bump dropped `proc-macro-error`
+# and `paste` from the tree entirely, so RUSTSEC-2024-0370 and RUSTSEC-2024-0436 were
+# pruned here (cargo-deny reported both as `advisory-not-detected`). That same bump
+# also removed the previously-unignored `structopt` and `proc-macro-error2`
+# unmaintained advisories.
 ignore = [
     # Unmaintained transitive crates (warnings promoted to errors by default);
     # all report "No safe upgrade is available!".
-    "RUSTSEC-2024-0370", # proc-macro-error — unmaintained (build-time macro dep)
     "RUSTSEC-2024-0384", # instant — unmaintained
     "RUSTSEC-2024-0388", # derivative — unmaintained
-    "RUSTSEC-2024-0436", # paste — unmaintained
     "RUSTSEC-2025-0141", # bincode — unmaintained
 ]
 

@@ -34,16 +34,16 @@ fern = "0.7.1"
 file-rotate = "0.8.0"
 flutter_rust_bridge = "=2.11.1"
 log = { version = "0.4.29", features = ["kv"] }
-minotari-wallet = { package = "minotari", git = "https://github.com/tari-project/minotari-cli.git", rev = "52a7287a3fe1e7831855649c530534af9f2d4830" }
+minotari-wallet = { package = "minotari", git = "https://github.com/tari-project/minotari-cli.git", rev = "af78477479166e21c7fb98d0e7d8d5b28d70c903" }
 once_cell = "1.21.3"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.31.0"
 rand = "0.10"
-tari_common = { version = "5.3.1-pre.0" }
-tari_common_types = { version = "5.3.1-pre.0" }
+tari_common = { version = "5.7.0-pre.8" }
+tari_common_types = { version = "5.7.0-pre.8" }
 tari_crypto = "0.23.0"
-tari_hashing = { version = "5.3.1-pre.0" }
-tari_transaction_components = { version = "5.3.1-pre.0" }
+tari_hashing = { version = "5.7.0-pre.8" }
+tari_transaction_components = { version = "5.7.0-pre.8" }
 tari_utilities = "0.10.0"
 thiserror = "2.0.17"
 tokio = { version = "1.47.1", features = ["full"] }
