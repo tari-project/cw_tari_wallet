@@ -281,4 +281,33 @@ now.
   network-independent `DEFAULT_BASE_URL` are frozen. A future **additive**
   explicit-network function (and network-derived base URL) would be a
   Cake-Wallet-coordinated change, not a behavior change to the existing functions.
+
+### Proposals raised by the `minotari af78477` / `tari_* 5.7.0-pre.8` security review
+
+Each of these would change the frozen contract, so none is implemented. They need a
+Cake-Wallet-coordinated migration (and the `breaking-api-approved` trail if a change
+is not purely additive).
+
+- **Surface reorg cancellations.** `ProcessingEvent::ReorgDetected` is mapped to
+  `None` in `map_processing_event`, so Dart is never told which transactions a
+  blockchain reorganization cancelled — a wallet can keep showing a transaction the
+  chain has dropped. Surfacing it means a new `ScanEventDto` variant, which is
+  additive but changes the streamed event set that Cake Wallet pattern-matches on.
+- **Type the secrets crossing the FFI.** `SendTransactionDetails.seed_words`
+  (`Vec<String>`) and `.passphrase` (`Option<String>`) cross the bridge as plain
+  values. The bridge now *moves* them into zeroizing containers on entry, so no
+  un-wiped Rust-side duplicate remains, but the buffers the FFI layer itself
+  allocates are outside our control. Fixing that fully means changing the public
+  field types.
+- **Honour upstream's replay binding.** `build_unsigned_transaction` mints a fresh
+  random `Uuid` per attempt, discarding upstream's idempotency mechanism: two
+  identical send attempts are two independent reservations rather than one
+  idempotent operation. Deriving the key from the request (as upstream's
+  `IdempotencyOperation` fingerprint does) would make a retried send safe, but the
+  key would need to be caller-supplied or caller-visible.
+- **Validate `base_url` and stop trusting `accepted: true`.** `base_url` is accepted
+  unvalidated, so a plaintext `http://` endpoint is permitted; and the node's
+  `accepted: true` response is treated as proof of broadcast. Rejecting non-TLS
+  endpoints would break any caller currently passing `http://`, so it needs
+  coordination.
 </content>

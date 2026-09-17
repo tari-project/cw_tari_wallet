@@ -179,7 +179,7 @@ fn map_scan_status_event(e: ScanStatusEvent) -> Option<ScanStatusDto> {
         // in a bug report instead of silently vanishing.
         ScanStatusEvent::FastSyncPhaseStarted { .. }
         | ScanStatusEvent::FastSyncPhaseCompleted { .. } => {
-            log::debug!(
+            log::warn!(
                 "Dropping a fast-sync ScanStatusEvent with no Dto representation; this bridge \
                  only selects ScanMode::Full / ScanMode::Continuous, so receiving one means \
                  upstream changed which scan path those modes take"
@@ -304,6 +304,11 @@ pub struct ScanConfiguration {
 /// have **no** Dto representation (so the streamed set/sequence Cake Wallet receives
 /// is exactly the events that already had a Dto — adding/dropping a `Some` here would
 /// change the frozen event contract; do not).
+///
+/// Like [`map_scan_status_event`], this match is **exhaustive** (no `_` arm) on
+/// purpose: a new upstream `ProcessingEvent` variant may well be balance- or
+/// security-relevant, and a wildcard would swallow it silently. Failing the build
+/// forces the drop-or-surface decision to be made deliberately.
 fn map_processing_event(event: ProcessingEvent) -> Option<ScanEventDto> {
     match event {
         ProcessingEvent::ScanStatus(status) => {
@@ -313,7 +318,11 @@ fn map_processing_event(event: ProcessingEvent) -> Option<ScanEventDto> {
         ProcessingEvent::TransactionsUpdated(e) => {
             Some(ScanEventDto::TransactionsUpdated(e.into()))
         }
-        _ => None,
+        // `BlockProcessed` is per-block bookkeeping Dart has never been shown.
+        // `ReorgDetected` carries the transactions a reorg cancelled and *would* be
+        // worth surfacing, but adding it is an additive contract change that needs
+        // Cake Wallet coordination — see the proposals list in CONTRIBUTING.md.
+        ProcessingEvent::BlockProcessed(_) | ProcessingEvent::ReorgDetected(_) => None,
     }
 }
 

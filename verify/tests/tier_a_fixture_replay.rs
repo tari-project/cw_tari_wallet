@@ -20,6 +20,9 @@ use rust_lib_flutter_rust_wallet::api::address::get_address;
 use rust_lib_flutter_rust_wallet::api::balance::get_balance;
 use rust_lib_flutter_rust_wallet::api::db::{disconnect_database, initialize_database};
 use rust_lib_flutter_rust_wallet::api::network::TariNetwork;
+use rust_lib_flutter_rust_wallet::api::send_transaction::{
+    send_transaction_with_handler, SendTransactionDetails,
+};
 use rust_lib_flutter_rust_wallet::api::transactions::get_transactions;
 use rust_lib_flutter_rust_wallet::api::wallet::list_wallets;
 use verify::fixture;
@@ -139,6 +142,82 @@ fn get_transactions_returns_the_golden_transaction() {
             .map(TransactionSnapshot::from)
             .collect::<Vec<_>>()
     );
+}
+
+/// A send whose seed words do not belong to the account is rejected **before** any
+/// UTXO is reserved, and leaves the balance completely untouched.
+///
+/// Since the `minotari af78477` / `tari_* 5.7.0-pre.8` bump, `sign_locked_transaction`
+/// verifies a payload-integrity signature, so a seed/account mismatch fails at the
+/// *signing* step — which happens after `start_new_transaction` has already flipped the
+/// selected outputs to `Locked`. Nothing in this embedding unlocks them again (the
+/// expiry sweep only runs in minotari's daemon, which Cake Wallet does not link), so the
+/// pre-flight check this asserts is what keeps a mistyped seed word from stranding funds.
+///
+/// **What this does and does not prove.** It proves the mismatch is caught on the
+/// pre-lock path, carries the non-accusatory message, and moves no balance. It cannot
+/// demonstrate the stranding scenario itself: the Tier A fixture is a **view-only**
+/// account with no spendable outputs, so there is nothing here for
+/// `start_new_transaction` to lock even without the guard. Exercising the
+/// lock-then-fail-then-release path needs a funded wallet and therefore belongs to
+/// Tier C.
+#[test]
+fn send_with_foreign_seed_words_is_rejected_without_touching_the_balance() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _db = with_fixture_db();
+
+    let before = get_balance(fixture::WALLET_NAME.to_string()).expect("balance before");
+
+    // A valid mnemonic for some *other* wallet, generated in-test so no real seed is
+    // ever committed. It is overwhelmingly unlikely to share the fixture's view key.
+    let foreign_seed_words = fixture::random_seed_words();
+
+    // Send to the fixture's own address, so the only thing wrong is the seed words.
+    let recipient = get_address(
+        fixture::WALLET_NAME.to_string(),
+        Some(String::new()),
+        Some(TariNetwork::Esmeralda),
+    )
+    .expect("fixture address");
+
+    let details = SendTransactionDetails {
+        seed_words: foreign_seed_words,
+        passphrase: Some(String::new()),
+        network: Some(TariNetwork::Esmeralda),
+        base_url: None,
+        wallet_name: fixture::WALLET_NAME.to_string(),
+        recipient_address: recipient,
+        amount: 1_000,
+        payment_id: None,
+        confirmation_window: None,
+    };
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let result = runtime.block_on(send_transaction_with_handler(details, |_| {}));
+
+    let err = result.err().expect("a foreign seed must not be accepted");
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("do not match this wallet account"),
+        "must name the real cause, got {rendered:?}"
+    );
+    assert!(
+        !rendered.to_lowercase().contains("tampered"),
+        "must not accuse the user of tampering, got {rendered:?}"
+    );
+
+    // Nothing was reserved: no funds moved into `locked`, and the spendable balance is
+    // exactly what it was before the attempt.
+    let after = get_balance(fixture::WALLET_NAME.to_string()).expect("balance after");
+    assert_eq!(
+        after.locked, 0,
+        "no UTXO may be left locked by a failed send"
+    );
+    assert_eq!(
+        after.available, before.available,
+        "available must not change"
+    );
+    assert_eq!(after.total, before.total, "total must not change");
 }
 
 // ---------------------------------------------------------------------------

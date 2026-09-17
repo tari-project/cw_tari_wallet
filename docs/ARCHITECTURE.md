@@ -137,11 +137,21 @@ All numeric/string defaults consumed by the `api` layer live exactly once in
 | `DEFAULT_CONFIRMATION_WINDOW` | `3` | confirmations (blocks) when unspecified |
 | `DEFAULT_BASE_URL` | `https://rpc.tari.com` | base-node RPC when `base_url` omitted |
 | `DEFAULT_PASSPHRASE` | `""` | passphrase fallback when `None` |
-| `SECONDS_TO_LOCK_UTXO` | `86_400` (24h) | UTXO lock duration on send |
+| `SECONDS_TO_LOCK_UTXO` | `86_400` (24h) | reservation expiry passed to `start_new_transaction` — see note below |
 | `DEFAULT_NUM_OUTPUTS` | `1` | outputs assumed for fee estimation |
 
 These values are byte-for-byte what they were before consolidation and are pinned
-by value-guard tests. `DEFAULT_BASE_URL` is **not** derived from the requested
+by value-guard tests.
+
+`SECONDS_TO_LOCK_UTXO` is **not** a duration after which the lock lifts by itself.
+It is handed to upstream's `start_new_transaction` as the reservation's `expires_at`,
+but nothing in this embedding ever processes that expiry: upstream releases expired
+reservations from `TransactionUnlocker::unlock_expired_transactions`, which only runs
+in `minotari`'s daemon (Cake Wallet links this library, not the daemon), and
+`fetch_unspent_outputs` selects on `status` with no expiry clause. Reserved UTXOs are
+therefore released only by an explicit call — `finalize_transaction_and_broadcast` on
+its own failure paths, or `release_send_reservation` on the bridge's. A process kill
+between reserving and broadcasting still strands them until the account is rescanned. `DEFAULT_BASE_URL` is **not** derived from the requested
 network (deriving it would change observable behavior — a deferred, coordinated
 change).
 
@@ -179,4 +189,40 @@ Test modules opt out with a module-level
 `#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]` so assertions
 read naturally while production code stays under the strict policy. CI runs
 `clippy --all-targets --all-features -- -D warnings`.
+
+## Release profile: integer overflow is **not** trapped (known, deferred gap)
+
+The workspace root manifest defines no `[profile.release]`, and Cargo honours
+profile settings **only from the workspace root** — a dependency's profile is
+ignored. Upstream `minotari-cli` sets:
+
+```toml
+[profile.release]
+# By default, Rust will wrap an integer in release mode instead of throwing the overflow error
+# seen in debug mode. Panicking at this time is better than silently using the wrong value.
+overflow-checks = true
+```
+
+That setting does **not** apply to the native libraries this crate produces, so
+the artifact Cake Wallet ships is built **without** overflow checks.
+
+**Why it matters.** `tari_amount.rs` deliberately keeps native wrapping arithmetic
+on the assumption that the trap is active. Without it, every `+` / `-` / `*` on
+`MicroMinotari` — balances, fees, change amounts, totals — wraps **silently** in
+production instead of panicking, so an overflow becomes a wrong number rather
+than a loud failure.
+
+**Status.** This is **pre-existing** and was not introduced by the `minotari
+af78477` / `tari_* 5.7.0-pre.8` bump. It became newly salient because upstream now
+documents the reliance explicitly, and because that bump rewrote the fee estimator
+(`get_default_features_and_scripts_size`), putting more arithmetic on the
+reachable path.
+
+**Why it is deferred rather than simply fixed.** Enabling `overflow-checks`
+converts a silent wrong value into a **panic**, and a panic unwinding across an
+FFI `cdylib` boundary is undefined behaviour. Turning it on therefore has to be
+paired with either `panic = "abort"` or verified proof that FRB's `catch_unwind`
+wrapping covers *every* bridge entry point. That is a separate change with its own
+test pass, not a one-line manifest edit — so it is recorded here rather than
+bundled into a dependency bump.
 </content>

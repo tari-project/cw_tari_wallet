@@ -87,9 +87,33 @@ diff) before the version is tagged.
   scan. If a support report mentions "non-contiguous block batch", it traces to
   this bump.
 
+  Scope: this is a **data-consistency** guard, not an authenticity control. It
+  rejects a single forged height *jump*, but not N contiguous fabricated blocks —
+  the heights a base node supplies remain trusted input, and this check does not
+  make the wallet safe against a malicious node.
+
 - `ScanStatusDto::Paused` with reason `Cancelled` can now be emitted mid-batch as
   well as at loop-top (upstream `coordinator.rs`), so cancellation is observed
   sooner. The event type and the set of streamed events are unchanged.
+
+### Fixed
+
+- **A failed send no longer strands the user's funds.** `start_new_transaction`
+  flips the selected UTXOs to `Locked`, and upstream only releases them again from
+  `TransactionUnlocker::unlock_expired_transactions`, which runs solely in
+  `minotari`'s **daemon** — Cake Wallet links this library, not the daemon.
+  `fetch_unspent_outputs` has no expiry clause either, so nothing re-examines a
+  stale lock: `SECONDS_TO_LOCK_UTXO` (24h) was decorative and the lock was in
+  practice **permanent**. Combined with the new signing precondition below and a
+  fresh random idempotency key per attempt, a user who mistyped one seed word and
+  retried could permanently lock a different UTXO set each time, recoverable only
+  by deleting the DB and rescanning. Two changes close this:
+  1. `send_transaction` now verifies the supplied seed words control the account
+     **before** reserving anything, so the common mismatch costs nothing.
+  2. Any failure after the reservation (signing or broadcast) now releases it via
+     `db::expire_and_unlock_pending_transaction`, which only acts while the row is
+     still `Pending` and so can never hand back the inputs of a transaction that
+     already reached the network.
 
 ### Security
 
@@ -108,23 +132,55 @@ diff) before the version is tagged.
   payload is prepared by the `TransactionSender` built from the DB account
   (`SendTransactionDetails.wallet_name` + `passphrase`), while signing uses
   `key_manager_from_seed_words(&details.seed_words)`. The two therefore have to
-  derive the same view key. When they do not, the send fails at the signing stage
-  and Dart receives the existing `Signing Error: …` variant carrying upstream's
-  message ("Offline payload integrity check failed: payload signature is
-  invalid…"). No error string in this crate was added or changed.
+  derive the same view key. The bridge now checks this up front (see **Fixed**
+  above) and reports it through the existing `Signing Error: ` variant with a new,
+  accurate `details` string: *"The supplied seed words do not match this wallet
+  account. Check that the wallet name, passphrase and seed words all belong to the
+  same wallet."* Upstream's own wording for this condition claims the payload "was
+  tampered with in transit or is corrupt", which is almost always wrong here — the
+  real cause is a wrong passphrase or the wrong wallet — and would drive false
+  security reports to Cake Wallet support. The frozen
+  `#[error("Signing Error: {details}")]` format is unchanged; only the substituted
+  `details` text is new, and it is pinned by a characterization test. Every other
+  upstream signing error still passes through verbatim.
 
   Note the check is a *tamper* guard, not an authorisation one: upstream documents
   that the view key is shareable, so passing it means "the payload was not mangled
   by someone without view access", not "the payload is what the owner asked for".
 
-- `send_transaction` no longer materialises a non-zeroizing plaintext copy of the
-  wallet passphrase. `TransactionSender::new` now accepts an owned
-  `Zeroizing<String>`, so the zeroizing container is moved end-to-end instead of
-  being converted back to a bare `String` at the call boundary.
+- `send_transaction` handles the passphrase and seed words better. Upstream's
+  `TransactionSender::new` now accepts an owned `Zeroizing<String>`, so the
+  container is moved end-to-end rather than converted back to a bare `String`; and
+  the bridge now **moves** `seed_words` and `passphrase` out of the caller-owned
+  `SendTransactionDetails` into zeroizing containers on entry, so the original heap
+  buffers are the ones wiped on every return path, including early `?` exits. The
+  public field *types* are unchanged, so this is not a contract change. Note this
+  does **not** cover whatever copy the FFI layer itself holds — that remains a
+  known, contract-bound limitation (recorded as a proposal in `CONTRIBUTING.md`).
+- Upstream fixed a secret-leak in `CipherSeed`: 5.3.1-pre.0 **derived** `Debug`,
+  rendering the master entropy and salt into any `{:?}` sink (a log line, a panic
+  message, a backtrace). 5.7.0-pre.8 replaces it with a hand-written redacting
+  `Debug`. This crate never intentionally formatted a `CipherSeed`, but the bump
+  removes the footgun.
+- Verified that **no `tari_hashing` domain-separation tag or label changed** across
+  5.3.1-pre.0 → 5.7.0-pre.8 (the only change is the *addition* of
+  `OfflineSigningPayloadHashDomain`; `hashers.rs`, `lib.rs`, `layer2.rs` and
+  `borsh_hasher.rs` are byte-identical, as is `tari_crypto` 0.23.0 → 0.23.3
+  `src/`). Existing wallets therefore derive identical addresses and keys after
+  this bump.
 - The `minotari`/`tari_*` bump dropped `proc-macro-error`, `proc-macro-error2`,
   `paste` and `structopt` from the dependency tree, clearing four *unmaintained*
   advisories. Pruned the two now-stale ignores (RUSTSEC-2024-0370,
   RUSTSEC-2024-0436) from `deny.toml`; three unmaintained entries remain.
+- Cleared the four remaining advisories by semver-compatible lockfile bumps, per
+  `deny.toml`'s "prefer an update over an ignore" policy and with **no manifest
+  change**: `anyhow` 1.0.100 → 1.0.104 (RUSTSEC-2026-0190, unsoundness in
+  `Error::downcast_mut()`), `crossbeam-epoch` 0.9.18 → 0.9.21 (RUSTSEC-2026-0204),
+  `h2` 0.4.12 → 0.4.19 (RUSTSEC-2026-0258, unbounded empty DATA frames) and
+  `rustls` 0.23.35 → 0.23.45 with `rustls-webpki` 0.103.13 → 0.103.15
+  (RUSTSEC-2026-0285, TLS 1.3 handshake messages accepted across encryption-level
+  boundaries). Also replaced the yanked `chacha20` 0.10.0 with 0.10.2.
+  `cargo deny check` now reports `advisories ok, bans ok, licenses ok, sources ok`.
 
 - Remediated five transitive RUSTSEC advisories via semver-compatible lockfile
   bumps (no public-API or bridge change): `time` 0.3.44 → 0.3.47
@@ -145,6 +201,37 @@ diff) before the version is tagged.
   contract.
 - Dependency, `minotari` bump, and release policy documented in
   [CONTRIBUTING.md](./CONTRIBUTING.md#dependency--release-management).
+
+### Known gaps shipped with this change
+
+- **Integer overflow is not trapped in release builds.** The workspace root sets no
+  `[profile.release]`, and Cargo honours profiles only from the workspace root, so
+  upstream `minotari`'s `overflow-checks = true` does **not** apply to the native
+  libraries shipped here. Arithmetic on `MicroMinotari` (balances, fees, change,
+  totals) wraps silently rather than panicking. Pre-existing, not introduced by this
+  bump; deliberately deferred because enabling it requires pairing with
+  `panic = "abort"` or proving FRB's `catch_unwind` covers every entry point (a
+  panic unwinding across the FFI boundary is UB). Full rationale in
+  [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#release-profile-integer-overflow-is-not-trapped-known-deferred-gap).
+
+- **Two paths ship without live (Tier C) validation.** Tiers A and B are hermetic
+  and cannot exercise either, and Tier C was not run before this merge. If a bug
+  report matches one of the symptoms below, it traces to this bump:
+
+  1. **Send — seed-words ↔ stored-account mismatch, and reservation release.**
+     Symptom: a send fails with `Signing Error: The supplied seed words do not
+     match this wallet account.` The pre-flight view-key check that produces this
+     message is covered by a Tier A test, but the path it guards — reserve UTXOs,
+     fail at signing, then release via `expire_and_unlock_pending_transaction` —
+     needs a **funded** wallet and is therefore unexercised. The Tier A fixture is
+     view-only with no spendable outputs. Watch for: a failed send leaving a
+     non-zero `locked` balance in `get_balance`.
+  2. **Scan — non-contiguous block batch abort.** Symptom: `start_scan` terminates
+     with `ScanEventDto::Error` containing `Base node returned a non-contiguous
+     block batch for account <id>: expected height <N>, got <M>`. This is a new
+     upstream strict check on exactly the `ScanMode::Full` / `ScanMode::Continuous`
+     path this bridge drives, so a base node that previously scanned through can
+     now abort the scan.
 
 ## [0.1.0]
 
