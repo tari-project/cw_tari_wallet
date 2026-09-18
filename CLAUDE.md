@@ -76,4 +76,4 @@ The `verify/` workspace member is the end-to-end harness: hermetic **Tier A** (f
 
 ## Key dependencies
 
-`minotari` is a **git pin** (`tari-project/minotari-cli`, specific rev); `tari_*` crates are versioned (`5.3.1-pre.0`). Bumping them is a coordinated procedure (see `CONTRIBUTING.md` → dependency & release management). Run `cargo deny check` per `deny.toml`.
+`minotari` is a **git pin** (`tari-project/minotari-cli`, specific rev); `tari_*` crates are versioned (`5.7.0-pre.8`). Bumping them is a coordinated procedure (see `CONTRIBUTING.md` → dependency & release management). Run `cargo deny check` per `deny.toml`.

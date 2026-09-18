@@ -34,6 +34,8 @@ use minotari_wallet::transactions::{
 };
 use minotari_wallet::utils::init_wallet::init_with_view_key;
 use tari_common::configuration::Network;
+use tari_common_types::seeds::cipher_seed::CipherSeed;
+use tari_common_types::seeds::mnemonic::{Mnemonic, MnemonicLanguage};
 use tari_common_types::types::{CompressedPublicKey, FixedHash};
 use tari_crypto::ristretto::RistrettoSecretKey;
 use tari_transaction_components::MicroMinotari;
@@ -97,6 +99,24 @@ pub const TX_CONFIRMATIONS: u64 = 7;
 /// A fixed timestamp (Unix seconds) for the golden transaction, so the formatted
 /// timestamp string in the DTO is deterministic.
 pub const TX_TIMESTAMP: i64 = 1_700_000_000; // 2023-11-14T22:13:20Z
+
+/// Generate a valid BIP39 mnemonic for a fresh, random wallet.
+///
+/// Used to supply seed words that are well-formed but belong to some *other* wallet, so
+/// a test can exercise the seed/account mismatch path. Generated per call so no real
+/// seed phrase is ever committed to the repository.
+pub fn random_seed_words() -> Vec<String> {
+    let seed = CipherSeed::random();
+    let mnemonic = seed
+        .to_mnemonic(MnemonicLanguage::English, None)
+        .expect("a random cipher seed must produce a valid mnemonic");
+    mnemonic
+        .join(" ")
+        .reveal()
+        .split_whitespace()
+        .map(|w| w.to_string())
+        .collect()
+}
 
 /// Build the deterministic view-only fixture DB at `db_path` from scratch
 /// (overwriting any existing file). Used by both the recorder (`gen-fixture`) and

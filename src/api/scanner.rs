@@ -155,59 +155,87 @@ pub enum ScanStatusDto {
     },
 }
 
-impl From<ScanStatusEvent> for ScanStatusDto {
-    fn from(e: ScanStatusEvent) -> Self {
-        match e {
-            ScanStatusEvent::Started {
-                account_id,
-                from_height,
-            } => ScanStatusDto::Started {
-                account_id,
-                from_height,
-            },
-            ScanStatusEvent::Progress {
-                account_id,
-                current_height,
-                blocks_scanned,
-            } => ScanStatusDto::Progress {
-                account_id,
-                current_height,
-                blocks_scanned,
-            },
-            ScanStatusEvent::Completed {
-                account_id,
-                final_height,
-                total_blocks_scanned,
-            } => ScanStatusDto::Completed {
-                account_id,
-                final_height,
-                total_blocks_scanned,
-            },
-            ScanStatusEvent::Paused {
-                account_id,
-                last_scanned_height,
-                reason,
-            } => ScanStatusDto::Paused {
-                account_id,
-                last_scanned_height,
-                reason: format!("{:?}", reason),
-            },
-            ScanStatusEvent::Waiting {
-                account_id,
-                resume_in,
-            } => ScanStatusDto::Waiting {
-                account_id,
-                resume_in_seconds: resume_in.as_secs(),
-            },
-            ScanStatusEvent::MoreBlocksAvailable {
-                account_id,
-                last_scanned_height,
-            } => ScanStatusDto::MoreBlocksAvailable {
-                account_id,
-                last_scanned_height,
-            },
+/// Map an upstream [`ScanStatusEvent`] to the public [`ScanStatusDto`].
+///
+/// Returns `None` for upstream status variants that intentionally have **no** Dto
+/// representation, mirroring [`map_processing_event`]'s policy: the streamed
+/// set/sequence Cake Wallet receives is frozen, so a new upstream variant must be
+/// *dropped* here rather than given a new `ScanStatusDto` variant (which would be a
+/// breaking change to the event contract).
+///
+/// Currently dropped: `FastSyncPhaseStarted` / `FastSyncPhaseCompleted`. These are
+/// emitted **only** under `ScanMode::FastSync` and by the separate backfill pass,
+/// neither of which this bridge ever selects ([`start_scan_with_handler`] only ever
+/// builds `ScanMode::Full` or `ScanMode::Continuous`), so in practice they are
+/// unreachable and dropping them is observationally a no-op.
+///
+/// This match is deliberately **exhaustive** (no `_` arm) so that a future upstream
+/// variant fails the build and forces this decision to be made explicitly again.
+fn map_scan_status_event(e: ScanStatusEvent) -> Option<ScanStatusDto> {
+    let dto = match e {
+        // The exhaustive match cannot catch the *other* way this could go wrong:
+        // upstream routing the Full/Continuous path through fast sync would add no
+        // new variant, it would just start emitting these. Log it so that shows up
+        // in a bug report instead of silently vanishing.
+        ScanStatusEvent::FastSyncPhaseStarted { .. }
+        | ScanStatusEvent::FastSyncPhaseCompleted { .. } => {
+            log::warn!(
+                "Dropping a fast-sync ScanStatusEvent with no Dto representation; this bridge \
+                 only selects ScanMode::Full / ScanMode::Continuous, so receiving one means \
+                 upstream changed which scan path those modes take"
+            );
+            return None;
         }
-    }
+        ScanStatusEvent::Started {
+            account_id,
+            from_height,
+        } => ScanStatusDto::Started {
+            account_id,
+            from_height,
+        },
+        ScanStatusEvent::Progress {
+            account_id,
+            current_height,
+            blocks_scanned,
+        } => ScanStatusDto::Progress {
+            account_id,
+            current_height,
+            blocks_scanned,
+        },
+        ScanStatusEvent::Completed {
+            account_id,
+            final_height,
+            total_blocks_scanned,
+        } => ScanStatusDto::Completed {
+            account_id,
+            final_height,
+            total_blocks_scanned,
+        },
+        ScanStatusEvent::Paused {
+            account_id,
+            last_scanned_height,
+            reason,
+        } => ScanStatusDto::Paused {
+            account_id,
+            last_scanned_height,
+            reason: format!("{:?}", reason),
+        },
+        ScanStatusEvent::Waiting {
+            account_id,
+            resume_in,
+        } => ScanStatusDto::Waiting {
+            account_id,
+            resume_in_seconds: resume_in.as_secs(),
+        },
+        ScanStatusEvent::MoreBlocksAvailable {
+            account_id,
+            last_scanned_height,
+        } => ScanStatusDto::MoreBlocksAvailable {
+            account_id,
+            last_scanned_height,
+        },
+    };
+    Some(dto)
 }
 
 /// Newly discovered transactions, carried inside
@@ -276,14 +304,25 @@ pub struct ScanConfiguration {
 /// have **no** Dto representation (so the streamed set/sequence Cake Wallet receives
 /// is exactly the events that already had a Dto — adding/dropping a `Some` here would
 /// change the frozen event contract; do not).
+///
+/// Like [`map_scan_status_event`], this match is **exhaustive** (no `_` arm) on
+/// purpose: a new upstream `ProcessingEvent` variant may well be balance- or
+/// security-relevant, and a wildcard would swallow it silently. Failing the build
+/// forces the drop-or-surface decision to be made deliberately.
 fn map_processing_event(event: ProcessingEvent) -> Option<ScanEventDto> {
     match event {
-        ProcessingEvent::ScanStatus(status) => Some(ScanEventDto::Status(status.into())),
+        ProcessingEvent::ScanStatus(status) => {
+            map_scan_status_event(status).map(ScanEventDto::Status)
+        }
         ProcessingEvent::TransactionsReady(e) => Some(ScanEventDto::TransactionsReady(e.into())),
         ProcessingEvent::TransactionsUpdated(e) => {
             Some(ScanEventDto::TransactionsUpdated(e.into()))
         }
-        _ => None,
+        // `BlockProcessed` is per-block bookkeeping Dart has never been shown.
+        // `ReorgDetected` carries the transactions a reorg cancelled and *would* be
+        // worth surfacing, but adding it is an additive contract change that needs
+        // Cake Wallet coordination — see the proposals list in CONTRIBUTING.md.
+        ProcessingEvent::BlockProcessed(_) | ProcessingEvent::ReorgDetected(_) => None,
     }
 }
 
@@ -627,7 +666,7 @@ mod tests {
     // dropped, ordering is preserved, sink-closed cancels the scan, and the task joins
     // (never leaks).
 
-    use minotari_wallet::scan::BlockProcessedEvent;
+    use minotari_wallet::scan::{BlockProcessedEvent, FastSyncPhase};
     use std::sync::Mutex;
     use tokio::sync::mpsc;
 
@@ -748,6 +787,46 @@ mod tests {
             "the one delivered event triggered the cancel-on-error path"
         );
         drop(tx);
+    }
+
+    /// Upstream-drift tripwire for the frozen **event** contract.
+    ///
+    /// `ScanStatusEvent` gained `FastSyncPhaseStarted` / `FastSyncPhaseCompleted` in
+    /// minotari `af78477`. Neither may surface to Dart: adding a `ScanStatusDto`
+    /// variant for them would change the streamed event set, which is a breaking
+    /// change. They must map to `None` and therefore never reach the sink.
+    #[test]
+    fn fast_sync_status_events_have_no_dto_representation() {
+        assert!(
+            map_scan_status_event(ScanStatusEvent::FastSyncPhaseStarted {
+                account_id: 1,
+                phase: FastSyncPhase::FastUtxoScan,
+                from_height: 100,
+                to_height: Some(200),
+            })
+            .is_none(),
+            "FastSyncPhaseStarted must not surface to Dart"
+        );
+        assert!(
+            map_scan_status_event(ScanStatusEvent::FastSyncPhaseCompleted {
+                account_id: 1,
+                phase: FastSyncPhase::FastUtxoScan,
+            })
+            .is_none(),
+            "FastSyncPhaseCompleted must not surface to Dart"
+        );
+
+        // ...while the contract's own variants still map through unchanged.
+        assert!(matches!(
+            map_scan_status_event(ScanStatusEvent::Started {
+                account_id: 1,
+                from_height: 100,
+            }),
+            Some(ScanStatusDto::Started {
+                account_id: 1,
+                from_height: 100
+            })
+        ));
     }
 
     /// Processing events without a Dto (`_ => None`) are skipped without ending the
