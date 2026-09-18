@@ -41,7 +41,6 @@ use tari_crypto::ristretto::RistrettoSecretKey;
 use tari_transaction_components::MicroMinotari;
 use tari_utilities::hex::Hex;
 use tari_utilities::ByteArray;
-use tari_utilities::SafePassword;
 
 // ---------------------------------------------------------------------------
 // Golden constants — the single source of truth for the Tier A assertions.

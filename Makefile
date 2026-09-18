@@ -46,7 +46,10 @@ fmt-check:
 	cargo fmt --all -- --check
 
 lint:
-	cargo clippy --all-targets --all-features -- -D warnings
+	# `--workspace` to match CI (.github/workflows/ci.yml) so the `verify` harness
+	# crate is linted here too — without it this target is strictly weaker than the
+	# merge gate and lint failures in `verify/` only surface on the PR.
+	cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 check:
 	cargo check --all-targets

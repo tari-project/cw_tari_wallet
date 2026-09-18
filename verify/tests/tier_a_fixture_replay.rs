@@ -195,7 +195,7 @@ fn send_with_foreign_seed_words_is_rejected_without_touching_the_balance() {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let result = runtime.block_on(send_transaction_with_handler(details, |_| {}));
 
-    let err = result.err().expect("a foreign seed must not be accepted");
+    let err = result.expect_err("a foreign seed must not be accepted");
     let rendered = err.to_string();
     assert!(
         rendered.contains("do not match this wallet account"),
