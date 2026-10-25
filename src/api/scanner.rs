@@ -1,5 +1,8 @@
 use crate::api::error::WalletError;
-use crate::api::transactions::DisplayedTransactionDto;
+use crate::api::transactions::{
+    begin_scan_history_changes, finish_scan_history_changes, DisplayedTransactionDto,
+};
+use crate::domain::history_changes::ScanHistoryChanges;
 use crate::{
     api::db::{get_db_connection, get_db_path, release_expired_reservations},
     frb_generated::StreamSink,
@@ -358,6 +361,7 @@ async fn run_forwarder<F>(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<ProcessingEvent>,
     cancel_token: CancellationToken,
     callback: Arc<F>,
+    mut history_changes: ScanHistoryChanges,
 ) where
     F: Fn(ScanEventDto) -> Result<()> + Send + Sync + 'static,
 {
@@ -370,12 +374,18 @@ async fn run_forwarder<F>(
             maybe = rx.recv() => match maybe {
                 Some(event) => event,
                 // Sender dropped: channel fully drained, nothing left to forward.
-                None => break,
+                None => {
+                    if !cancel_token.is_cancelled() {
+                        finish_scan_history_changes(history_changes);
+                    }
+                    return;
+                },
             },
             // Direct cancellation (stop_scan / supersede / teardown). Stop promptly.
             () = cancel_token.cancelled() => break,
         };
 
+        record_scan_history_changes(&event, &mut history_changes);
         if let Some(dto) = map_processing_event(event) {
             if callback(dto).is_err() {
                 // The Dart StreamSink is closed. Cancel the scan (scan-cancels-on-
@@ -386,6 +396,32 @@ async fn run_forwarder<F>(
                 break;
             }
         }
+    }
+}
+
+// Record dirty IDs without changing the frozen stream's set or order of events.
+fn record_scan_history_changes(event: &ProcessingEvent, changes: &mut ScanHistoryChanges) {
+    use crate::api::transactions::record_scan_transaction_changes;
+    match event {
+        ProcessingEvent::TransactionsReady(e) => record_scan_transaction_changes(
+            changes,
+            e.account_id,
+            e.transactions.iter().map(|tx| tx.id.to_string()),
+        ),
+        ProcessingEvent::TransactionsUpdated(e) => record_scan_transaction_changes(
+            changes,
+            e.account_id,
+            e.updated_transactions.iter().map(|tx| tx.id.to_string()),
+        ),
+        ProcessingEvent::ReorgDetected(e) => record_scan_transaction_changes(
+            changes,
+            e.account_id,
+            e.reorganized_displayed_transactions
+                .iter()
+                .map(|tx| tx.id.to_string())
+                .chain(e.cancelled_transaction_ids.iter().cloned()),
+        ),
+        ProcessingEvent::ScanStatus(_) | ProcessingEvent::BlockProcessed(_) => {}
     }
 }
 
@@ -431,7 +467,12 @@ where
     let event_callback = Arc::new(event_callback);
     let callback_for_spawn = event_callback.clone();
 
-    let forwarder = tokio::spawn(run_forwarder(rx, loop_cancel_token, callback_for_spawn));
+    let forwarder = tokio::spawn(run_forwarder(
+        rx,
+        loop_cancel_token,
+        callback_for_spawn,
+        begin_scan_history_changes(),
+    ));
 
     // Install this scan as the current one. Any controller we replace is a
     // *previous* scan that was never stopped: preserve "latest scan wins" by
@@ -734,7 +775,12 @@ mod tests {
         let token = CancellationToken::new();
         let sink = FakeSink::new(false);
 
-        let handle = tokio::spawn(run_forwarder(rx, token.clone(), Arc::new(sink.callback())));
+        let handle = tokio::spawn(run_forwarder(
+            rx,
+            token.clone(),
+            Arc::new(sink.callback()),
+            begin_scan_history_changes(),
+        ));
 
         tx.send(started_event(1, 100)).unwrap();
         tx.send(completed_event(1, 110)).unwrap();
@@ -767,7 +813,12 @@ mod tests {
         let token = CancellationToken::new();
         let sink = FakeSink::new(false);
 
-        let handle = tokio::spawn(run_forwarder(rx, token.clone(), Arc::new(sink.callback())));
+        let handle = tokio::spawn(run_forwarder(
+            rx,
+            token.clone(),
+            Arc::new(sink.callback()),
+            begin_scan_history_changes(),
+        ));
 
         token.cancel();
         // Must complete despite `tx` still being alive (channel open).
@@ -783,7 +834,12 @@ mod tests {
         let token = CancellationToken::new();
         let sink = FakeSink::new(true); // callback returns Err
 
-        let handle = tokio::spawn(run_forwarder(rx, token.clone(), Arc::new(sink.callback())));
+        let handle = tokio::spawn(run_forwarder(
+            rx,
+            token.clone(),
+            Arc::new(sink.callback()),
+            begin_scan_history_changes(),
+        ));
 
         tx.send(started_event(1, 100)).unwrap();
         handle.await.unwrap();
@@ -848,7 +904,12 @@ mod tests {
         let token = CancellationToken::new();
         let sink = FakeSink::new(false);
 
-        let handle = tokio::spawn(run_forwarder(rx, token.clone(), Arc::new(sink.callback())));
+        let handle = tokio::spawn(run_forwarder(
+            rx,
+            token.clone(),
+            Arc::new(sink.callback()),
+            begin_scan_history_changes(),
+        ));
 
         // A BlockProcessed event maps to None; sandwich it between two mapped events
         // to prove it's silently skipped and ordering is preserved.

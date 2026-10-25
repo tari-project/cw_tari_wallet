@@ -84,7 +84,7 @@ Future<List<String>> revealSeedWords({required SensitiveSeeds handle}) =>
 /// Delete the wallet account named `wallet_name` from the database.
 ///
 /// Requires [`initialize_database`] first. Synchronous; errors if the delete
-/// fails.
+/// fails. All account data is removed atomically; an error rolls back the delete.
 Future<void> deleteWallet({required String walletName}) =>
     RustLib.instance.api.crateApiWalletDeleteWallet(walletName: walletName);
 

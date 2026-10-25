@@ -3,6 +3,7 @@ use crate::api::db::{get_db_connection, get_db_pool, release_expired_reservation
 use crate::api::error::WalletError;
 use crate::api::network::{apply_network, parse_network, TariNetwork};
 use crate::api::transactions::DisplayedTransactionDto;
+use crate::domain::history::{kernel_fee, normalize_local_send};
 use crate::domain::keys::key_manager_from_seed_words;
 use crate::domain::validation::{validate_send_inputs, ValidatedInputs};
 use crate::frb_generated::StreamSink;
@@ -73,7 +74,20 @@ pub struct SendTransactionEvent {
 
 #[frb(ignore)]
 pub async fn send_transaction_with_handler<F>(
+    details: SendTransactionDetails,
+    status_callback: F,
+) -> Result<DisplayedTransactionDto>
+where
+    F: Fn(SendTransactionEvent) + Send + Sync + 'static,
+{
+    send_transaction_with_fee_handler(details, None, status_callback).await
+}
+
+/// Internal runner shared by the frozen send API and the explicit fee API.
+#[frb(ignore)]
+pub async fn send_transaction_with_fee_handler<F>(
     mut details: SendTransactionDetails,
+    fee_limits: Option<(u64, u64)>,
     status_callback: F,
 ) -> Result<DisplayedTransactionDto>
 where
@@ -93,6 +107,13 @@ where
             .take()
             .unwrap_or_else(|| DEFAULT_PASSPHRASE.to_string()),
     );
+
+    if let Some((rate, maximum)) = fee_limits {
+        minotari_wallet::transactions::fund_locker::validate_fee_per_gram(MicroMinotari(rate))?;
+        if maximum == 0 {
+            anyhow::bail!("Maximum transaction fee must be greater than zero");
+        }
+    }
 
     let report = |stage: TransactionStage, msg: &str| {
         status_callback(SendTransactionEvent {
@@ -118,6 +139,9 @@ where
         validated.network,
         validated.confirmations,
     )?;
+    if let Some((rate, _)) = fee_limits {
+        sender.fee_per_gram = MicroMinotari(rate);
+    }
 
     // Derive the signing key manager and prove it belongs to this account *before*
     // `start_new_transaction` reserves any UTXO. Since the bump, `sign_locked_transaction`
@@ -176,6 +200,19 @@ where
         }
     };
 
+    let actual_fee = match kernel_fee(&signed_transaction.signed_transaction.transaction) {
+        Ok(fee) => fee,
+        Err(error) => {
+            release_send_reservation(&pending_transaction_id);
+            return Err(error);
+        }
+    };
+    if let Some((_, maximum)) = fee_limits {
+        if let Err(error) = validate_confirmed_fee(actual_fee, maximum) {
+            release_send_reservation(&pending_transaction_id);
+            return Err(error);
+        }
+    }
     report(TransactionStage::Broadcasting, "Broadcasting to network...");
 
     let base_url = details
@@ -183,30 +220,36 @@ where
         .take()
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
 
-    let result_tx = match sender
+    let mut result_tx = match sender
         .finalize_transaction_and_broadcast(signed_transaction, base_url)
         .await
     {
-        Ok(tx) => tx,
+        Ok(sent) => {
+            // Finalization has recorded the send even when the first broadcast
+            // was not accepted. Treat it as pending, never invite a duplicate send.
+            if !sent.accepted_by_node {
+                log::warn!(
+                    "Send recorded but not yet accepted by the node: note={:?}, node_reason={:?}",
+                    sent.note,
+                    sent.node_reason
+                );
+            }
+            sent.displayed_transaction
+        }
         Err(e) => {
             release_send_reservation(&pending_transaction_id);
             return Err(WalletError::network(e.to_string()).into());
         }
     };
 
-    // The send is recorded either way; a send the node has not accepted is
-    // rebroadcast by the scan's transaction monitor and must not be retried.
-    if !result_tx.accepted_by_node {
-        log::warn!(
-            "Send recorded but not yet accepted by the node: note={:?}, node_reason={:?}",
-            result_tx.note,
-            result_tx.node_reason
-        );
-    }
-
+    crate::api::transactions::record_transaction_changes(
+        result_tx.details.account_id,
+        [result_tx.id.to_string()],
+    );
     report(TransactionStage::Completed, "Transaction sent");
 
-    Ok(result_tx.displayed_transaction.into())
+    normalize_local_send(&mut result_tx, actual_fee);
+    Ok(result_tx.into())
 }
 
 /// Release the UTXOs this send reserved, best-effort.
@@ -228,6 +271,37 @@ fn release_send_reservation(pending_transaction_id: &str) {
         .and_then(|conn| {
             expire_and_unlock_pending_transaction(&conn, pending_transaction_id)
                 .map_err(|e| e.to_string())
+        });
+
+    match released {
+        Ok(true) => log::info!("Released the UTXO reservation for a failed send"),
+        // Already `Completed`/`Expired`: nothing to release, which is the safe outcome.
+        Ok(false) => log::debug!("No pending UTXO reservation to release for a failed send"),
+        Err(e) => log::warn!(
+            "Failed to release the UTXO reservation for a failed send; these outputs stay \
+             locked until the reservation expires and the next send, scan or init sweeps it: {e}"
+        ),
+    }
+}
+
+// Preparation can fail before its pending row ID is returned. Resolve it by the
+// account-scoped idempotency key so this failure path also releases its inputs.
+fn release_send_reservation_by_key(idempotency_key: &str, account_id: i64) {
+    let released = get_db_connection()
+        .map_err(|e| e.to_string())
+        .and_then(|conn| {
+            // Locks refer to pending_transactions.id, not its idempotency key.
+            let pending = minotari_wallet::db::find_pending_transaction_record_by_idempotency_key(
+                &conn,
+                idempotency_key,
+                account_id,
+            )
+            .map_err(|e| e.to_string())?;
+            match pending {
+                Some(record) => expire_and_unlock_pending_transaction(&conn, &record.id)
+                    .map_err(|e| e.to_string()),
+                None => Ok(false),
+            }
         });
 
     match released {
@@ -281,6 +355,13 @@ pub(crate) const SEED_WORDS_ACCOUNT_MISMATCH: &str =
     "The supplied seed words do not match this wallet account. Check that the wallet name, \
      passphrase and seed words all belong to the same wallet.";
 
+fn validate_confirmed_fee(actual_fee: u64, maximum: u64) -> Result<()> {
+    if actual_fee > maximum {
+        anyhow::bail!("Transaction fee exceeds the confirmed estimate. Review the payment again.");
+    }
+    Ok(())
+}
+
 /// Convert an upstream signing failure into a [`WalletError::Signing`].
 ///
 /// The payload-integrity failure is re-worded to [`SEED_WORDS_ACCOUNT_MISMATCH`] for the
@@ -325,6 +406,31 @@ pub async fn send_transaction(
         let _ = stream_sink.add(event);
     })
     .await
+}
+
+/// Send at an explicitly confirmed rate, refusing a fee above `max_fee` before
+/// broadcasting and releasing the reservation on refusal. Rate is microTari per
+/// gram; max_fee is microTari. Existing send API and DTO remain unchanged.
+#[frb]
+pub async fn send_transaction_with_fee(
+    sink: StreamSink<SendTransactionEvent>,
+    details: SendTransactionDetails,
+    fee_per_gram: u64,
+    max_fee: u64,
+) -> Result<()> {
+    let events = sink.clone();
+    let result =
+        send_transaction_with_fee_handler(details, Some((fee_per_gram, max_fee)), move |event| {
+            let _ = events.add(event);
+        })
+        .await;
+    if let Err(error) = result {
+        // FRB runs this function on a separate unawaited normal-task channel.
+        // Return errors on the stream Cake listens to before dropping its sink;
+        // do not leave an unhandled error on the normal-task Future instead.
+        let _ = sink.add_error(error);
+    }
+    Ok(())
 }
 
 /// Thin adapter: resolve the network (frozen `None → MainNet` default) and hand the
@@ -383,9 +489,21 @@ fn build_unsigned_transaction(
 
     let idempotency_key = uuid::Uuid::new_v4().to_string();
 
-    let tx = sender
-        .start_new_transaction(idempotency_key, recipient, SECONDS_TO_LOCK_UTXO)
-        .map_err(|e| WalletError::wallet(format!("Failed to build transaction: {}", e)))?;
+    let tx = match sender.start_new_transaction(
+        idempotency_key.clone(),
+        recipient,
+        SECONDS_TO_LOCK_UTXO,
+    ) {
+        Ok(tx) => tx,
+        Err(error) => {
+            // Upstream can reserve inputs and then fail while preparing the
+            // payload. The caller never receives the key on this error path.
+            release_send_reservation_by_key(&idempotency_key, sender.account.id);
+            return Err(
+                WalletError::wallet(format!("Failed to build transaction: {}", error)).into(),
+            );
+        }
+    };
 
     Ok((sender.processed_transactions.id().to_string(), tx))
 }
@@ -405,6 +523,15 @@ mod tests {
     use tari_common_types::types::CompressedPublicKey;
     use tari_crypto::ristretto::RistrettoSecretKey;
     use tari_utilities::ByteArray;
+
+    #[test]
+    fn confirmed_fee_is_an_upper_bound_including_uint64_edges() {
+        assert!(validate_confirmed_fee(1, 1).is_ok());
+        assert!(validate_confirmed_fee(1, u64::MAX).is_ok());
+        assert!(validate_confirmed_fee(u64::MAX, u64::MAX).is_ok());
+        assert!(validate_confirmed_fee(2, 1).is_err());
+        assert!(validate_confirmed_fee(u64::MAX, 1).is_err());
+    }
 
     /// Build a deterministic, valid base58 Tari (dual) address from fixed key
     /// bytes. The bytes are small little-endian scalars (well below the group
@@ -781,6 +908,26 @@ mod tests {
         .unwrap();
         crate::api::db::release_expired_reservations(&conn);
         assert_eq!(output_status(&conn, output_id), "UNSPENT");
+    }
+
+    #[test]
+    fn expiry_sweep_never_releases_inputs_of_a_recorded_send() {
+        let (_dir, pool, output_id, pending_id) = reserve_one_output();
+        let conn = pool.get().unwrap();
+
+        // Recording a send completes its reservation, even while the displayed
+        // transaction is Pending node acceptance. Those inputs cannot be reused.
+        conn.execute(
+            "UPDATE pending_transactions SET status = 'COMPLETED', \
+             expires_at = '2000-01-01 00:00:00' WHERE id = ?1",
+            [&pending_id],
+        )
+        .unwrap();
+
+        crate::api::db::release_expired_reservations(&conn);
+        assert_eq!(output_status(&conn, output_id), "LOCKED");
+        assert!(!expire_and_unlock_pending_transaction(&conn, &pending_id).unwrap());
+        assert_eq!(output_status(&conn, output_id), "LOCKED");
     }
 
     #[test]

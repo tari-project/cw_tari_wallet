@@ -307,3 +307,380 @@ impl From<&DisplayedTransactionDto> for TransactionSnapshot {
         }
     }
 }
+
+#[test]
+fn confirmation_refresh_persists_scanned_depth_without_confirming_unmined_sends() {
+    use minotari_wallet::db::{
+        get_accounts, get_displayed_transactions_by_account, insert_displayed_transaction,
+        insert_scanned_tip_block, update_displayed_transaction_confirmations,
+    };
+    use minotari_wallet::transactions::{TransactionDirection, TransactionDisplayStatus as Status};
+    use rust_lib_flutter_rust_wallet::api::transactions::{
+        refresh_transaction_confirmations, DisplayedTransactionStatus,
+    };
+    use tari_common_types::types::FixedHash;
+
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let db = with_fixture_db();
+    let conn = rusqlite::Connection::open(db._dir.path().join("wallet.db")).unwrap();
+    let account = get_accounts(&conn, Some(fixture::WALLET_NAME))
+        .unwrap()
+        .remove(0);
+    let mut receipt = get_displayed_transactions_by_account(&conn, account.id)
+        .unwrap()
+        .remove(0);
+    receipt.status = Status::Unconfirmed;
+    receipt.blockchain.confirmations = 0;
+    receipt.blockchain.block_hash = FixedHash::from([1u8; 32]);
+    update_displayed_transaction_confirmations(&conn, &receipt).unwrap();
+    // A second synthetic account in this fixture must not be updated by the
+    // first wallet's scan, even though both histories share one SQLite DB.
+    conn.execute(
+        "INSERT INTO accounts (friendly_name, fingerprint, encrypted_wallet, cipher_nonce, salt, birthday)
+         SELECT 'other-fixture', ?1, encrypted_wallet, cipher_nonce, salt, birthday
+         FROM accounts WHERE id = ?2",
+        rusqlite::params![vec![2u8; 32], account.id],
+    ).unwrap();
+    let other_account_id = conn.last_insert_rowid();
+    let mut other_receipt = receipt.clone();
+    other_receipt.id = 44u64.into();
+    other_receipt.details.account_id = other_account_id;
+    insert_displayed_transaction(&conn, &other_receipt).unwrap();
+    insert_scanned_tip_block(
+        &conn,
+        other_account_id,
+        (fixture::TX_BLOCK_HEIGHT + 100) as i64,
+        &[4u8; 32],
+    )
+    .unwrap();
+    let mut pending_send = receipt.clone();
+    pending_send.id = 43u64.into();
+    pending_send.direction = TransactionDirection::Outgoing;
+    pending_send.status = Status::Pending;
+    pending_send.blockchain.block_height = 0;
+    insert_displayed_transaction(&conn, &pending_send).unwrap();
+
+    // No scanned tip means no evidence to confirm anything, even a mined receipt.
+    assert!(
+        refresh_transaction_confirmations(fixture::WALLET_NAME.into(), None)
+            .unwrap()
+            .is_empty()
+    );
+    insert_scanned_tip_block(
+        &conn,
+        account.id,
+        (fixture::TX_BLOCK_HEIGHT + 2) as i64,
+        &[2u8; 32],
+    )
+    .unwrap();
+    let updated = refresh_transaction_confirmations(fixture::WALLET_NAME.into(), None).unwrap();
+    assert_eq!(updated.len(), 1);
+    assert_eq!(updated[0].id, fixture::TX_ID.to_string());
+    assert_eq!(updated[0].blockchain.confirmations, 2);
+    assert!(matches!(
+        updated[0].status,
+        DisplayedTransactionStatus::Unconfirmed
+    ));
+    assert!(
+        refresh_transaction_confirmations(fixture::WALLET_NAME.into(), None)
+            .unwrap()
+            .is_empty()
+    );
+
+    insert_scanned_tip_block(
+        &conn,
+        account.id,
+        (fixture::TX_BLOCK_HEIGHT + 3) as i64,
+        &[3u8; 32],
+    )
+    .unwrap();
+    let updated = refresh_transaction_confirmations(fixture::WALLET_NAME.into(), None).unwrap();
+    assert_eq!(updated.len(), 1);
+    assert!(matches!(
+        updated[0].status,
+        DisplayedTransactionStatus::Confirmed
+    ));
+    let persisted = get_transactions(fixture::WALLET_NAME.into(), 100, 0).unwrap();
+    let receipt = persisted
+        .iter()
+        .find(|tx| tx.id == fixture::TX_ID.to_string())
+        .unwrap();
+    assert_eq!(receipt.blockchain.confirmations, 3);
+    assert!(matches!(
+        receipt.status,
+        DisplayedTransactionStatus::Confirmed
+    ));
+    let pending_send = persisted.iter().find(|tx| tx.id == "43").unwrap();
+    assert_eq!(pending_send.blockchain.confirmations, 0);
+    assert!(matches!(
+        pending_send.status,
+        DisplayedTransactionStatus::Pending
+    ));
+    let other = get_transactions("other-fixture".into(), 100, 0).unwrap();
+    assert_eq!(other.len(), 1);
+    assert_eq!(other[0].blockchain.confirmations, 0);
+    assert!(matches!(
+        other[0].status,
+        DisplayedTransactionStatus::Unconfirmed
+    ));
+    assert!(refresh_transaction_confirmations("missing-wallet".into(), None).is_err());
+    assert!(refresh_transaction_confirmations(fixture::WALLET_NAME.into(), Some(0)).is_err());
+    assert!(
+        refresh_transaction_confirmations(fixture::WALLET_NAME.into(), None)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        get_balance(fixture::WALLET_NAME.into()).unwrap().total,
+        fixture::GOLDEN_TOTAL
+    );
+}
+
+#[test]
+fn outgoing_history_repairs_mined_status_payref_and_signed_fee_without_changing_ledger() {
+    use minotari_wallet::db::{
+        create_completed_transaction, get_accounts, get_displayed_transactions_by_account,
+        insert_displayed_transaction, insert_scanned_tip_block,
+    };
+    use minotari_wallet::transactions::{
+        FeeInfo, TransactionDirection, TransactionDisplayStatus as Status,
+    };
+    use rust_lib_flutter_rust_wallet::api::transactions::{
+        refresh_transaction_confirmations, DisplayedTransactionStatus,
+    };
+    use tari_common_types::{payment_reference::generate_payment_reference, types::FixedHash};
+    use tari_transaction_components::{
+        transaction_components::{Transaction, TransactionKernel},
+        MicroMinotari,
+    };
+    use tari_utilities::ByteArray;
+
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let db = with_fixture_db();
+    let conn = rusqlite::Connection::open(db._dir.path().join("wallet.db")).unwrap();
+    let account = get_accounts(&conn, Some(fixture::WALLET_NAME))
+        .unwrap()
+        .remove(0);
+    let mut send = get_displayed_transactions_by_account(&conn, account.id)
+        .unwrap()
+        .remove(0);
+    // Exercise unsigned u64 tx IDs stored as wrapped i64 in completed history.
+    send.id = (u64::MAX - 1).into();
+    send.direction = TransactionDirection::Outgoing;
+    send.status = Status::Pending;
+    send.blockchain.block_height = 0;
+    send.blockchain.block_hash = FixedHash::zero();
+    send.blockchain.confirmations = 0;
+    send.amount = MicroMinotari(10_000_700);
+    send.fee = Some(FeeInfo {
+        amount: MicroMinotari(0),
+    });
+    send.details.total_debit = MicroMinotari(100_000_000);
+    send.details.total_credit = MicroMinotari(89_999_300);
+    let recipient_hash = FixedHash::from([41_u8; 32]);
+    send.details.sent_output_hashes = vec![recipient_hash];
+    let change_hash = FixedHash::from([45_u8; 32]);
+    send.details.outputs = vec![minotari_wallet::transactions::TransactionOutput {
+        hash: change_hash,
+        amount: MicroMinotari(89_999_300),
+        status: minotari_wallet::models::OutputStatus::Unspent,
+        mined_in_block_height: 0,
+        mined_in_block_hash: FixedHash::zero(),
+        output_type: tari_transaction_components::transaction_components::OutputType::Standard,
+        is_change: true,
+    }];
+    let provisional = generate_payment_reference(&FixedHash::zero(), &recipient_hash);
+    send.details.sent_payrefs = vec![provisional];
+    insert_displayed_transaction(&conn, &send).unwrap();
+    conn.execute(
+        "INSERT INTO pending_transactions (id, account_id, idempotency_key, status, expires_at)
+         VALUES ('outgoing-fixture', ?1, 'outgoing-fixture', 'completed', '2030-01-01 00:00:00')",
+        [account.id],
+    )
+    .unwrap();
+    let signed = Transaction::new(
+        vec![],
+        vec![],
+        vec![TransactionKernel::new_current_version(
+            Default::default(),
+            MicroMinotari(700),
+            0,
+            Default::default(),
+            Default::default(),
+            None,
+        )],
+        Default::default(),
+        Default::default(),
+    );
+    create_completed_transaction(
+        &conn,
+        account.id,
+        "outgoing-fixture",
+        &[0_u8; 32],
+        &serde_json::to_vec(&signed).unwrap(),
+        None,
+        send.id,
+    )
+    .unwrap();
+
+    let read_send = || {
+        use rust_lib_flutter_rust_wallet::api::transactions::get_changed_transactions;
+        let changes = get_changed_transactions(
+            fixture::WALLET_NAME.into(),
+            Some(vec![(u64::MAX - 1).to_string()]),
+        )
+        .unwrap();
+        assert_eq!(changes.len(), 1);
+        assert!(get_changed_transactions(fixture::WALLET_NAME.into(), None)
+            .unwrap()
+            .is_empty());
+        changes.into_iter().next().unwrap()
+    };
+    let dto = read_send();
+    assert_eq!(dto.amount, 10_000_000);
+    assert_eq!(dto.fee.unwrap().amount, 700);
+    assert!(matches!(dto.status, DisplayedTransactionStatus::Pending));
+    assert!(dto.payrefs.is_empty());
+
+    // Simulate 0.3.0's scanner: it finds the block but leaves the pending hash
+    // and PayRef untouched. Use deterministic synthetic hashes, no funded wallet.
+    send.status = Status::Unconfirmed;
+    send.blockchain.block_height = fixture::TX_BLOCK_HEIGHT;
+    conn.execute(
+        "DELETE FROM displayed_transactions WHERE id = ?1",
+        [send.id.to_string()],
+    )
+    .unwrap();
+    insert_displayed_transaction(&conn, &send).unwrap();
+    let block_hash = FixedHash::from([42_u8; 32]);
+    insert_scanned_tip_block(
+        &conn,
+        account.id,
+        fixture::TX_BLOCK_HEIGHT as i64,
+        block_hash.as_bytes(),
+    )
+    .unwrap();
+    insert_scanned_tip_block(
+        &conn,
+        account.id,
+        (fixture::TX_BLOCK_HEIGHT + 2) as i64,
+        &[43_u8; 32],
+    )
+    .unwrap();
+    refresh_transaction_confirmations(fixture::WALLET_NAME.into(), None).unwrap();
+    let dto = read_send();
+    assert_eq!(dto.blockchain.confirmations, 2);
+    assert!(matches!(
+        dto.status,
+        DisplayedTransactionStatus::Unconfirmed
+    ));
+    let reference = generate_payment_reference(&block_hash, &recipient_hash).to_string();
+    assert_ne!(reference, provisional.to_string());
+    assert_eq!(dto.payrefs, vec![reference.clone()]);
+
+    insert_scanned_tip_block(
+        &conn,
+        account.id,
+        (fixture::TX_BLOCK_HEIGHT + 3) as i64,
+        &[44_u8; 32],
+    )
+    .unwrap();
+    refresh_transaction_confirmations(fixture::WALLET_NAME.into(), None).unwrap();
+    let dto = read_send();
+    assert!(matches!(dto.status, DisplayedTransactionStatus::Confirmed));
+    assert_eq!(dto.blockchain.confirmations, 3);
+    assert_eq!(dto.blockchain.block_height, fixture::TX_BLOCK_HEIGHT);
+    assert_eq!(dto.amount, 10_000_000);
+    assert_eq!(dto.fee.unwrap().amount, 700);
+    assert_eq!(dto.payrefs, vec![reference.clone()]);
+    let stored = get_displayed_transactions_by_account(&conn, account.id)
+        .unwrap()
+        .into_iter()
+        .find(|tx| tx.id == send.id)
+        .unwrap();
+    assert_eq!(stored.amount.0, 10_000_700);
+    assert_eq!(stored.details.total_debit.0, 100_000_000);
+    assert_eq!(stored.details.total_credit.0, 89_999_300);
+    assert_eq!(stored.blockchain.block_hash, block_hash);
+    assert_eq!(
+        get_balance(fixture::WALLET_NAME.into()).unwrap().total,
+        fixture::GOLDEN_TOTAL
+    );
+    // Incoming history and its golden amounts are unaffected.
+    let receipt = get_transactions(fixture::WALLET_NAME.into(), 100, 0)
+        .unwrap()
+        .into_iter()
+        .find(|tx| tx.id == fixture::TX_ID.to_string())
+        .unwrap();
+    assert_eq!(receipt.amount, fixture::TX_AMOUNT);
+
+    // Read repair also covers old Confirmed rows and pruned scanned blocks.
+    // With no actual block hash available, suppress the provisional reference.
+    let mut old_send = stored;
+    old_send.blockchain.block_hash = FixedHash::zero();
+    minotari_wallet::db::update_displayed_transaction_confirmations(&conn, &old_send).unwrap();
+    conn.execute(
+        "DELETE FROM scanned_tip_blocks WHERE account_id = ?1 AND height = ?2",
+        rusqlite::params![account.id, fixture::TX_BLOCK_HEIGHT as i64],
+    )
+    .unwrap();
+    assert!(read_send().payrefs.is_empty());
+    conn.execute(
+        "INSERT INTO outputs (account_id, tx_id, output_hash, mined_in_block_hash,
+         mined_in_block_height, value, wallet_output_json, mined_timestamp)
+         VALUES (?1, 45, ?2, ?3, ?4, 89999300, '{}', '2023-11-14 22:13:20')",
+        rusqlite::params![
+            account.id,
+            change_hash.as_bytes(),
+            block_hash.as_bytes(),
+            fixture::TX_BLOCK_HEIGHT as i64
+        ],
+    )
+    .unwrap();
+    assert_eq!(read_send().payrefs, vec![reference]);
+}
+
+#[test]
+fn changed_history_retries_bad_rows_and_does_not_read_unrelated_history() {
+    use rust_lib_flutter_rust_wallet::api::transactions::get_changed_transactions;
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let db = with_fixture_db();
+    let conn = rusqlite::Connection::open(db._dir.path().join("wallet.db")).unwrap();
+    assert!(get_changed_transactions(fixture::WALLET_NAME.into(), None)
+        .unwrap()
+        .is_empty());
+    let original: String = conn
+        .query_row(
+            "SELECT transaction_json FROM displayed_transactions WHERE id = ?1",
+            [fixture::TX_ID.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    conn.execute(
+        "UPDATE displayed_transactions SET transaction_json = 'invalid-json'",
+        [],
+    )
+    .unwrap();
+    // An unchanged cycle must not deserialize even an unrelated malformed row.
+    assert!(get_changed_transactions(fixture::WALLET_NAME.into(), None)
+        .unwrap()
+        .is_empty());
+    assert!(get_changed_transactions(
+        fixture::WALLET_NAME.into(),
+        Some(vec![fixture::TX_ID.to_string()]),
+    )
+    .is_err());
+    conn.execute(
+        "UPDATE displayed_transactions SET transaction_json = ?1",
+        [&original],
+    )
+    .unwrap();
+    // Failed reads were not acknowledged; a retry needs no new hint/event.
+    let changes = get_changed_transactions(fixture::WALLET_NAME.into(), None).unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].id, fixture::TX_ID.to_string());
+    assert_eq!(changes[0].amount, fixture::TX_AMOUNT);
+    assert!(get_changed_transactions(fixture::WALLET_NAME.into(), None)
+        .unwrap()
+        .is_empty());
+}

@@ -235,12 +235,18 @@ fn build_creation_details(
 /// Delete the wallet account named `wallet_name` from the database.
 ///
 /// Requires [`initialize_database`] first. Synchronous; errors if the delete
-/// fails.
+/// fails. All account data is removed atomically; an error rolls back the delete.
 #[frb]
 pub fn delete_wallet(wallet_name: String) -> Result<()> {
-    let conn = get_db_connection()?;
-
-    minotari_wallet::db::delete_account(&conn, &wallet_name).context("Failed to delete wallet")?;
+    let mut conn = get_db_connection()?;
+    let transaction = conn
+        .transaction()
+        .context("Failed to start wallet deletion")?;
+    minotari_wallet::db::delete_account(&transaction, &wallet_name)
+        .context("Failed to delete wallet")?;
+    transaction
+        .commit()
+        .context("Failed to commit wallet deletion")?;
 
     Ok(())
 }

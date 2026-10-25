@@ -8,9 +8,9 @@ import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'transactions.dart';
 
-// These functions are ignored because they are not marked as `pub`: `build_unsigned_transaction`, `create_transaction_sender`, `map_signing_error`, `release_send_reservation`, `validate_inputs`, `verify_seed_words_match_account`
+// These functions are ignored because they are not marked as `pub`: `build_unsigned_transaction`, `create_transaction_sender`, `map_signing_error`, `release_send_reservation_by_key`, `release_send_reservation`, `validate_confirmed_fee`, `validate_inputs`, `verify_seed_words_match_account`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`
-// These functions are ignored (category: IgnoreBecauseExplicitAttribute): `send_transaction_with_handler`
+// These functions are ignored (category: IgnoreBecauseExplicitAttribute): `send_transaction_with_fee_handler`, `send_transaction_with_handler`
 
 /// Build, sign, and broadcast a one-sided transaction, streaming progress.
 ///
@@ -32,6 +32,16 @@ Stream<SendTransactionEvent> sendTransaction(
         {required SendTransactionDetails details}) =>
     RustLib.instance.api
         .crateApiSendTransactionSendTransaction(details: details);
+
+/// Send at an explicitly confirmed rate, refusing a fee above `max_fee` before
+/// broadcasting and releasing the reservation on refusal. Rate is microTari per
+/// gram; max_fee is microTari. Existing send API and DTO remain unchanged.
+Stream<SendTransactionEvent> sendTransactionWithFee(
+        {required SendTransactionDetails details,
+        required BigInt feePerGram,
+        required BigInt maxFee}) =>
+    RustLib.instance.api.crateApiSendTransactionSendTransactionWithFee(
+        details: details, feePerGram: feePerGram, maxFee: maxFee);
 
 /// Inputs to [`send_transaction`].
 ///

@@ -14,6 +14,8 @@
 //! structs or `WalletError`.
 
 pub(crate) mod address;
+pub(crate) mod history;
+pub(crate) mod history_changes;
 pub(crate) mod keys;
 pub(crate) mod signing;
 pub(crate) mod validation;

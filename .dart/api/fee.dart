@@ -8,6 +8,22 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `from`
 
+/// Estimate a concrete one-recipient payment using its selected rate and memo.
+/// Unlike the legacy estimator, UTXO selection uses the requested priority rather
+/// than Fast for every priority. This does not reserve funds or broadcast.
+Future<FeeEstimate> estimatePaymentFee(
+        {required BigInt amount,
+        required FeePriority priority,
+        required String baseUrl,
+        required String walletName,
+        String? paymentId}) =>
+    RustLib.instance.api.crateApiFeeEstimatePaymentFee(
+        amount: amount,
+        priority: priority,
+        baseUrl: baseUrl,
+        walletName: walletName,
+        paymentId: paymentId);
+
 /// Estimate the fee to send `amount` (in **microTari**) at the given `priority`.
 ///
 /// `base_url` is the base node RPC endpoint and `wallet_name` selects the funding

@@ -36,6 +36,39 @@ diff) before the version is tagged.
 
 ## [Unreleased]
 
+### Added
+
+- `get_changed_transactions(wallet_name, transaction_ids)` returns and acknowledges
+  account-local scan/send/reorg changes through the canonical history mapper.
+  Empty cycles read no history rows; failed reads retain IDs for retry. Consumers
+  must still load all history pages when opening a wallet. Existing bridge
+  declarations and streamed event shapes/order are preserved.
+
+### Main scanner integration (2026-10-17)
+
+- Retain scan-touched transaction IDs until the native producer completes and
+  its event channel drains. An early WAL read can see an old outgoing row or no
+  new incoming row before the write commits; re-arm those IDs for the post-scan
+  canonical read without waiting for another block. IDs coalesce per account,
+  and a database session change invalidates old scan events/replay.
+- Cake reconciles once after cancellation/scan error; normal empty cycles still
+  perform no history-row reads. Existing public scan events are unchanged.
+- Added a real SQLite + mocked-scan regression covering both early-read cases,
+  plus pure queue tests for replay, coalescing, and database-session isolation.
+
+- Pin minotari-cli **main** at `1ab7c8c651b2937a8b05fba9d5a432cf633ae3f8`
+  (merged #149), with Tari `6.2.0-pre.1`, tari_crypto `0.24`, and the matching
+  SQLite stack. The upstream package version remains `0.3.0`; the old tag does
+  not contain this fix.
+- Adapt finalization to `FinalizedSend`: a recorded transaction that the node has
+  not accepted remains pending and must not be reported as a retryable send error.
+- Cake consumes the upstream monitor events instead of calling the old
+  `refresh_transaction_confirmations` workaround. That bridge function remains
+  available for compatibility. Amount/fee normalization and PayRef repairs remain.
+- Added a hermetic scan regression through the real wrapper entry point: a
+  caught-up Full scan confirms a mined row, leaves an unmined send pending,
+  coalesces duplicate monitor events, and emits no history changes on the next pass.
+
 ### Changed
 
 - Bumped the `minotari-cli` git pin from `af78477` to `1ab7c8c` (tip of `main`,

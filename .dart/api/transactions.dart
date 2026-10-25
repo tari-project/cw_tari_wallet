@@ -6,6 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These functions are ignored because they are not marked as `pub`: `begin_scan_history_changes`, `finish_scan_history_changes`, `history_dto`, `record_scan_transaction_changes`, `record_transaction_changes`, `refresh_mined_status`, `reset_transaction_changes`, `restore_mined_block_hash`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// List a page of the wallet's transactions, most recent first.
@@ -19,6 +20,30 @@ Future<List<DisplayedTransactionDto>> getTransactions(
         required PlatformInt64 offset}) =>
     RustLib.instance.api.crateApiTransactionsGetTransactions(
         walletName: walletName, limit: limit, offset: offset);
+
+/// Read and acknowledge transactions changed by this process's scan/send events.
+///
+/// Returns current canonical history DTOs, including reorg changes, for this wallet
+/// only. Empty cycles read no history rows. Failed reads retain pending IDs, and
+/// concurrent updates remain pending. Load the full paginated history on opening:
+/// this in-memory notification queue is not a persistent history or a cursor.
+/// `transaction_ids` optionally includes IDs received in scan events; foreign or
+/// missing IDs are ignored. It does not change the scan event contract.
+Future<List<DisplayedTransactionDto>> getChangedTransactions(
+        {required String walletName, List<String>? transactionIds}) =>
+    RustLib.instance.api.crateApiTransactionsGetChangedTransactions(
+        walletName: walletName, transactionIds: transactionIds);
+
+/// Refresh mined Pending/Unconfirmed/Locked entries using this account's scanned tip.
+///
+/// Legacy compatibility API for minotari v0.3.0's skipped monitor. The pinned
+/// main revision fixes that monitor; Cake now consumes scan updates instead.
+/// Unmined sends and removed transactions are preserved.
+/// Returns changed entries; existing scan events and read APIs are unchanged.
+Future<List<DisplayedTransactionDto>> refreshTransactionConfirmations(
+        {required String walletName, BigInt? requiredConfirmations}) =>
+    RustLib.instance.api.crateApiTransactionsRefreshTransactionConfirmations(
+        walletName: walletName, requiredConfirmations: requiredConfirmations);
 
 /// Where a transaction sits on chain: `block_height`, a formatted `timestamp`
 /// string, and the number of `confirmations` (blocks) on top of it.

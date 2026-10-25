@@ -6,6 +6,64 @@ use flutter_rust_bridge::frb;
 use minotari_wallet::transactions::fee_estimator::{FeeEstimator, FeePriority as LibFeePriority};
 use tari_transaction_components::MicroMinotari;
 
+/// Estimate a concrete one-recipient payment using its selected rate and memo.
+/// Unlike the legacy estimator, UTXO selection uses the requested priority rather
+/// than Fast for every priority. This does not reserve funds or broadcast.
+#[frb]
+pub async fn estimate_payment_fee(
+    amount: u64,
+    priority: FeePriority,
+    base_url: String,
+    wallet_name: String,
+    payment_id: Option<String>,
+) -> Result<FeeEstimate> {
+    use minotari_wallet::{
+        db::get_account_by_name,
+        http::WalletHttpClient,
+        transactions::{
+            fee_estimator::estimated_output_size_for_payment_id, input_selector::InputSelector,
+        },
+    };
+
+    if amount == 0 {
+        anyhow::bail!("Payment amount must be greater than zero");
+    }
+    let client =
+        WalletHttpClient::with_config(base_url.parse()?, 0, std::time::Duration::from_secs(5))?;
+    // Same rate policy/fallback as upstream FeeEstimator. Selection below uses
+    // the chosen rate, so a valid Slow send is not rejected for lacking Fast fees.
+    let rate = match client.get_mempool_fee_per_gram_stats(3).await {
+        Ok(stats) if !stats.is_empty() => match priority {
+            FeePriority::Fast => stats[0].avg_fee_per_gram,
+            FeePriority::Medium => stats.get(1).unwrap_or(&stats[0]).avg_fee_per_gram,
+            FeePriority::Slow => stats[stats.len() - 1].min_fee_per_gram,
+        },
+        _ => MicroMinotari(match priority {
+            FeePriority::Fast => 10,
+            FeePriority::Medium => 5,
+            FeePriority::Slow => 1,
+        }),
+    }
+    .max(minotari_wallet::transactions::fund_locker::MIN_FEE_PER_GRAM);
+    let output_size =
+        estimated_output_size_for_payment_id(payment_id.as_ref().map_or(0, String::len))?;
+    let pool = get_db_pool()?;
+    let conn = pool.get()?;
+    let account = get_account_by_name(&conn, &wallet_name)?.ok_or(WalletError::NoAccounts)?;
+    let selection = InputSelector::new(account.id, DEFAULT_CONFIRMATION_WINDOW)
+        .fetch_unspent_outputs(&conn, MicroMinotari(amount), 1, rate, Some(output_size))?;
+    let fee = selection.fee();
+    let total = amount
+        .checked_add(fee.0)
+        .ok_or_else(|| anyhow::anyhow!("Amount plus fee overflows while estimating payment"))?;
+    Ok(FeeEstimate {
+        estimated_fee: fee.0,
+        total_amount_required: total,
+        fee_per_gram: rate.0,
+        input_count: selection.utxos.len(),
+    })
+}
+
 /// Desired confirmation speed for a transaction, trading fee against latency:
 /// `Slow` (cheapest), `Medium`, or `Fast` (most expensive).
 #[frb]
