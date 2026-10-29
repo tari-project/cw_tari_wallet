@@ -64,6 +64,48 @@ Future<WalletCreationDetails> importViewOnlyWallet(
         passphrase: passphrase,
         network: network);
 
+/// Import a spendable wallet from its view and spend private keys.
+///
+/// Unlike [`import_view_only_wallet`], the wallet can send: call
+/// [`send_transaction_multi`](crate::api::send_transaction::send_transaction_multi)
+/// with empty `seed_words` (the frozen `send_transaction` needs seed words). `view_private_key_hex`
+/// and `spend_private_key_hex` (both **secret**) are hex-encoded keys; `birthday` is
+/// the scan start in days since the birthday genesis (see
+/// [`birthday_from_date`](crate::api::height::birthday_from_date)); `passphrase`
+/// (**secret**) encrypts the wallet; `network` selects the network (`None` →
+/// MainNet). Requires [`initialize_database`] first. The returned `seed_words` is
+/// always `None` (a key-only wallet has no mnemonic). Synchronous; errors on
+/// invalid hex, a zero key, or equal view and spend keys.
+Future<WalletCreationDetails> importWalletFromKeys(
+        {required String walletName,
+        required String viewPrivateKeyHex,
+        required String spendPrivateKeyHex,
+        required int birthday,
+        required String passphrase,
+        TariNetwork? network}) =>
+    RustLib.instance.api.crateApiWalletImportWalletFromKeys(
+        walletName: walletName,
+        viewPrivateKeyHex: viewPrivateKeyHex,
+        spendPrivateKeyHex: spendPrivateKeyHex,
+        birthday: birthday,
+        passphrase: passphrase,
+        network: network);
+
+/// Re-encrypt wallet `wallet_name` under `new_passphrase`.
+///
+/// `old_passphrase` and `new_passphrase` are **secret**. A wrong `old_passphrase`
+/// errors as `Invalid Passphrase` and changes nothing. Stop any running scan first
+/// and restart it with the new passphrase. Requires [`initialize_database`] first.
+/// Synchronous.
+Future<void> changePassphrase(
+        {required String walletName,
+        required String oldPassphrase,
+        required String newPassphrase}) =>
+    RustLib.instance.api.crateApiWalletChangePassphrase(
+        walletName: walletName,
+        oldPassphrase: oldPassphrase,
+        newPassphrase: newPassphrase);
+
 /// Recover the seed words of the currently stored wallet.
 ///
 /// `password` (**secret**) is the wallet's encryption passphrase, required to

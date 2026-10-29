@@ -5,8 +5,10 @@ use crate::domain::address::{construct_wallet_address_details, split_hidden_word
 use crate::domain::keys::key_manager_from_cipher_seed;
 use anyhow::{Context, Result};
 use flutter_rust_bridge::frb;
-use minotari_wallet::db::get_accounts;
-use minotari_wallet::utils::init_wallet::{init_with_seed_words, init_with_view_key};
+use minotari_wallet::db::{get_accounts, WalletDbError};
+use minotari_wallet::utils::init_wallet::{
+    init_with_seed_words, init_with_spend_and_view_keys, init_with_view_key,
+};
 use std::str::FromStr;
 use tari_common::configuration::Network;
 use tari_common_types::seeds::cipher_seed::CipherSeed;
@@ -150,6 +152,86 @@ pub fn import_view_only_wallet(
         .map_err(|_| WalletError::internal("Invalid hex for spend key"))?;
 
     build_creation_details(spend_key, view_key, birthday, network, None)
+}
+
+/// Import a spendable wallet from its view and spend private keys.
+///
+/// Unlike [`import_view_only_wallet`], the wallet can send: call
+/// [`send_transaction_multi`](crate::api::send_transaction::send_transaction_multi)
+/// with empty `seed_words` (the frozen `send_transaction` needs seed words). `view_private_key_hex`
+/// and `spend_private_key_hex` (both **secret**) are hex-encoded keys; `birthday` is
+/// the scan start in days since the birthday genesis (see
+/// [`birthday_from_date`](crate::api::height::birthday_from_date)); `passphrase`
+/// (**secret**) encrypts the wallet; `network` selects the network (`None` →
+/// MainNet). Requires [`initialize_database`] first. The returned `seed_words` is
+/// always `None` (a key-only wallet has no mnemonic). Synchronous; errors on
+/// invalid hex, a zero key, or equal view and spend keys.
+#[frb]
+pub fn import_wallet_from_keys(
+    wallet_name: String,
+    view_private_key_hex: String,
+    spend_private_key_hex: String,
+    birthday: u16,
+    passphrase: String,
+    network: Option<TariNetwork>,
+) -> Result<WalletCreationDetails> {
+    let password = Zeroizing::new(passphrase);
+    let view_private_key_hex = Zeroizing::new(view_private_key_hex);
+    let spend_private_key_hex = Zeroizing::new(spend_private_key_hex);
+    let network = parse_network(network);
+    apply_network(network)?;
+
+    let db_path = get_db_path()?;
+
+    let address = init_with_spend_and_view_keys(
+        &view_private_key_hex,
+        &spend_private_key_hex,
+        &password,
+        &db_path,
+        birthday,
+        network,
+        None,
+        Some(&wallet_name),
+    )
+    .map_err(|e| WalletError::wallet(format!("Failed to import wallet from keys: {e:#}")))?;
+
+    Ok(WalletCreationDetails {
+        tari_address: address.to_base58(),
+        wallet_birthday: birthday,
+        spend_public_key_hex: address.public_spend_key().to_hex(),
+        view_private_key_hex: view_private_key_hex.to_string(),
+        seed_words: None,
+    })
+}
+
+/// Re-encrypt wallet `wallet_name` under `new_passphrase`.
+///
+/// `old_passphrase` and `new_passphrase` are **secret**. A wrong `old_passphrase`
+/// errors as `Invalid Passphrase` and changes nothing. Stop any running scan first
+/// and restart it with the new passphrase. Requires [`initialize_database`] first.
+/// Synchronous.
+#[frb]
+pub fn change_passphrase(
+    wallet_name: String,
+    old_passphrase: String,
+    new_passphrase: String,
+) -> Result<()> {
+    let old_passphrase = Zeroizing::new(old_passphrase);
+    let new_passphrase = Zeroizing::new(new_passphrase);
+    let mut conn = get_db_connection()?;
+
+    minotari_wallet::db::change_passphrase(
+        &mut conn,
+        &wallet_name,
+        &old_passphrase,
+        &new_passphrase,
+    )
+    .map_err(|e| match e {
+        WalletDbError::DecryptionFailed(_) => WalletError::InvalidPassphrase,
+        other => WalletError::database(other.to_string()),
+    })?;
+
+    Ok(())
 }
 
 /// Recover the seed words of the currently stored wallet.

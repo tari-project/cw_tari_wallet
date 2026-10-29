@@ -180,9 +180,9 @@ the frozen contract. Never bypass it on a dependency PR.
   be ignored. A reusable library would `.gitignore` it; we must not.
 - `minotari` is pinned by **git rev**; `tari_common` / `tari_common_types` /
   `tari_hashing` / `tari_transaction_components` are pinned **exactly** to the
-  `=6.2.0-pre.1` pre-release the `minotari` rev builds against (a caret pin would
-  resolve to `6.2.0` final, which that rev does not compile with; the transitive
-  `tari_*` crates are held at `6.2.0-pre.1` in `Cargo.lock`);
+  `=6.3.0-pre.1` pre-release the `minotari` rev builds against (a caret pin would
+  resolve to a later pre-release or final, which that rev does not compile with; the transitive
+  `tari_*` crates are held at `6.3.0-pre.1` in `Cargo.lock`);
   `flutter_rust_bridge` is pinned **exactly** `=2.11.1`.
 
 ### FRB runtime ↔ codegen CLI lockstep
@@ -228,7 +228,7 @@ process is:
    (function, class/enum, field, variant) means the bump leaked a contract change —
    revert, or promote to a MAJOR only via a coordinated migration (see below).
 
-Pre-release `tari_*` (`6.2.0-pre.1`) can change shape between pre-releases — never
+Pre-release `tari_*` (`6.3.0-pre.1`) can change shape between pre-releases — never
 auto-merge a `tari_*` bump.
 
 ### Dependency-update automation (Renovate)
@@ -291,11 +291,6 @@ Each of these would change the frozen contract, so none is implemented. They nee
 Cake-Wallet-coordinated migration (and the `breaking-api-approved` trail if a change
 is not purely additive).
 
-- **Surface reorg cancellations.** `ProcessingEvent::ReorgDetected` is mapped to
-  `None` in `map_processing_event`, so Dart is never told which transactions a
-  blockchain reorganization cancelled — a wallet can keep showing a transaction the
-  chain has dropped. Surfacing it means a new `ScanEventDto` variant, which is
-  additive but changes the streamed event set that Cake Wallet pattern-matches on.
 - **Type the secrets crossing the FFI.** `SendTransactionDetails.seed_words`
   (`Vec<String>`) and `.passphrase` (`Option<String>`) cross the bridge as plain
   values. The bridge now *moves* them into zeroizing containers on entry, so no

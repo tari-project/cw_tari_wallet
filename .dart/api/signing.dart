@@ -6,6 +6,8 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These functions are ignored because they are not marked as `pub`: `map_signing_error`
+
 /// Verify a `"<signature_hex>|<public_nonce_hex>"` signature over `message` against
 /// the public spend key in the base58 Tari `address`.
 ///
@@ -23,11 +25,25 @@ Future<bool> verifyMessage(
 /// Ristretto Schnorr signature as `"<signature_hex>|<public_nonce_hex>"`.
 ///
 /// Off-chain: no node, fee, or transaction — nothing is broadcast. The spend secret
-/// is derived from the 24-word `seed_words` via the same factory used by wallet
-/// creation and `send_transaction`, so it matches the spend key in the wallet's
-/// published address. View-only wallets have no mnemonic and cannot sign (guarded
-/// Dart-side); an invalid word list errors as `Invalid Seed Words`.
+/// is derived from the 24-word `seed_words`, so it matches the spend key in the
+/// wallet's published address. View-only wallets have no mnemonic and cannot sign;
+/// an invalid word list errors as `Invalid Seed Words`. Prefer
+/// [`sign_message_with_wallet`], which does not need the seed words in Dart.
 Future<String> signMessage(
         {required String message, required List<String> seedWords}) =>
     RustLib.instance.api
         .crateApiSigningSignMessage(message: message, seedWords: seedWords);
+
+/// Sign `message` with the spend key of the stored wallet `wallet_name`, returning
+/// `"<signature_hex>|<public_nonce_hex>"` as [`sign_message`] does.
+///
+/// `passphrase` (**secret**) decrypts the wallet. Errors with `Invalid Passphrase`
+/// for a wrong passphrase, `No accounts found for this wallet` for an unknown name,
+/// and `Signing Error: View-only wallets cannot sign messages` for a view-only
+/// wallet. Requires [`initialize_database`] first.
+Future<String> signMessageWithWallet(
+        {required String walletName,
+        required String passphrase,
+        required String message}) =>
+    RustLib.instance.api.crateApiSigningSignMessageWithWallet(
+        walletName: walletName, passphrase: passphrase, message: message);

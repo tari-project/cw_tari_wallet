@@ -12,8 +12,10 @@
 use rust_lib_flutter_rust_wallet::api::base_node::{
     check_node_health, get_tip_info, is_node_synced,
 };
+use rust_lib_flutter_rust_wallet::api::height::get_height_at_time;
+use rust_lib_flutter_rust_wallet::api::network::current_network;
 use verify::fixture::rpc;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Spin up a mock base node serving the committed `get_tip_info` capture.
@@ -94,4 +96,36 @@ async fn check_node_health_false_when_node_unreachable() {
             .expect("check_node_health must answer false, not Err, on failure"),
         "an unreachable node must report healthy = false"
     );
+}
+
+#[tokio::test]
+async fn get_height_at_time_returns_the_node_height() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/get_height_at_time"))
+        .and(query_param("time", "1700000000"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(123_456u64))
+        .mount(&server)
+        .await;
+
+    let height = get_height_at_time(server.uri(), 1_700_000_000)
+        .await
+        .expect("get_height_at_time");
+    assert_eq!(height, 123_456);
+}
+
+#[tokio::test]
+async fn get_height_at_time_node_error_is_network_error() {
+    // No route mounted: the node answers 404.
+    let server = MockServer::start().await;
+    let err = get_height_at_time(server.uri(), 1_700_000_000)
+        .await
+        .expect_err("a failing node must error");
+    assert!(err.to_string().starts_with("Network Error: "), "got {err}");
+}
+
+/// Nothing in this binary sets the process network, so it reads as unset.
+#[test]
+fn current_network_is_none_until_a_wallet_call_sets_it() {
+    assert_eq!(current_network(), None);
 }

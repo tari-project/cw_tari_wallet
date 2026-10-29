@@ -1,18 +1,16 @@
 //! Message signing / verification bridge adapter.
 //!
-//! Thin adapter over [`crate::domain::signing`]: parses the base58 Tari address,
-//! extracts its public spend key, and maps domain results / errors to the
-//! Dart-visible representation. The pure crypto lives in `domain`.
+//! Thin adapter over [`minotari_wallet::signing`]: parses the base58 Tari address
+//! and maps minotari's results / errors to the Dart-visible representation.
 
+use crate::api::db::get_db_connection;
 use crate::api::error::WalletError;
 use crate::domain::keys::key_manager_from_seed_words;
-use crate::domain::signing as domain_signing;
 use anyhow::Result;
+use minotari_wallet::db::{get_account_by_name, WalletDbError};
+use minotari_wallet::SigningError;
 use tari_common_types::tari_address::TariAddress;
-use tari_common_types::types::PrivateKey;
-use tari_transaction_components::key_manager::{
-    SecretTransactionKeyManagerInterface, TransactionKeyManagerInterface,
-};
+use zeroize::Zeroizing;
 
 /// Verify a `"<signature_hex>|<public_nonce_hex>"` signature over `message` against
 /// the public spend key in the base58 Tari `address`.
@@ -23,29 +21,62 @@ use tari_transaction_components::key_manager::{
 pub fn verify_message(message: String, signature: String, address: String) -> Result<bool> {
     let addr = TariAddress::from_base58(&address)
         .map_err(|e| WalletError::invalid_address(e.to_string()))?;
-    let public_key = addr
-        .public_spend_key()
-        .to_public_key()
-        .map_err(|e| WalletError::invalid_address(e.to_string()))?;
-    Ok(domain_signing::verify(&public_key, &message, &signature)?)
+    minotari_wallet::verify_message(&addr, &message, &signature)
+        .map_err(|e| map_signing_error(e).into())
 }
 
 /// Sign `message` with the wallet's spend secret, returning a domain-separated
 /// Ristretto Schnorr signature as `"<signature_hex>|<public_nonce_hex>"`.
 ///
 /// Off-chain: no node, fee, or transaction — nothing is broadcast. The spend secret
-/// is derived from the 24-word `seed_words` via the same factory used by wallet
-/// creation and `send_transaction`, so it matches the spend key in the wallet's
-/// published address. View-only wallets have no mnemonic and cannot sign (guarded
-/// Dart-side); an invalid word list errors as `Invalid Seed Words`.
+/// is derived from the 24-word `seed_words`, so it matches the spend key in the
+/// wallet's published address. View-only wallets have no mnemonic and cannot sign;
+/// an invalid word list errors as `Invalid Seed Words`. Prefer
+/// [`sign_message_with_wallet`], which does not need the seed words in Dart.
 pub fn sign_message(message: String, seed_words: Vec<String>) -> Result<String> {
-    let seed_words = zeroize::Zeroizing::new(seed_words);
-    let key_manager = key_manager_from_seed_words(&seed_words)?;
-    let spend = key_manager.get_spend_key();
-    let secret: PrivateKey = key_manager
-        .get_private_key(&spend.key_id)
-        .map_err(|e| WalletError::signing(e.to_string()))?;
-    Ok(domain_signing::sign(&secret, &message)?)
+    let seed_words = Zeroizing::new(seed_words);
+    // Derive the key manager here first only for its frozen error strings
+    // ("Invalid Seed Words: …", "Wallet Error: …"); minotari derives it again to sign.
+    key_manager_from_seed_words(&seed_words)?;
+    let joined = Zeroizing::new(seed_words.join(" "));
+    minotari_wallet::sign_message_with_seed(&joined, &message)
+        .map_err(|e| map_signing_error(e).into())
+}
+
+/// Sign `message` with the spend key of the stored wallet `wallet_name`, returning
+/// `"<signature_hex>|<public_nonce_hex>"` as [`sign_message`] does.
+///
+/// `passphrase` (**secret**) decrypts the wallet. Errors with `Invalid Passphrase`
+/// for a wrong passphrase, `No accounts found for this wallet` for an unknown name,
+/// and `Signing Error: View-only wallets cannot sign messages` for a view-only
+/// wallet. Requires [`initialize_database`] first.
+pub fn sign_message_with_wallet(
+    wallet_name: String,
+    passphrase: String,
+    message: String,
+) -> Result<String> {
+    let passphrase = Zeroizing::new(passphrase);
+    let conn = get_db_connection()?;
+    let account = get_account_by_name(&conn, &wallet_name)
+        .map_err(|e| WalletError::database(e.to_string()))?
+        .ok_or(WalletError::NoAccounts)?;
+    minotari_wallet::sign_message(&account, &passphrase, &message)
+        .map_err(|e| map_signing_error(e).into())
+}
+
+/// Map minotari's signing errors onto the frozen Dart-visible strings.
+fn map_signing_error(e: SigningError) -> WalletError {
+    match e {
+        SigningError::InvalidAddress(details) => WalletError::invalid_address(details),
+        SigningError::InvalidSeedWords(details) => WalletError::invalid_seed_words(details),
+        SigningError::Db(WalletDbError::DecryptionFailed(_)) => WalletError::InvalidPassphrase,
+        SigningError::Db(e) => WalletError::database(e.to_string()),
+        SigningError::KeyManager(details) => WalletError::signing(details),
+        SigningError::ViewOnlyWallet
+        | SigningError::MalformedSignature
+        | SigningError::InvalidSignatureComponent
+        | SigningError::InvalidPublicNonce => WalletError::signing(e.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -55,15 +86,13 @@ mod tests {
 
     use super::*;
     use crate::domain::address::construct_wallet_address_details;
-    use crate::domain::signing::{
-        INVALID_NONCE_COMPONENT, INVALID_SIG_COMPONENT, MALFORMED_SIG_FORMAT,
-    };
     use tari_common::configuration::Network;
     use tari_common_types::seeds::cipher_seed::CipherSeed;
     use tari_common_types::seeds::mnemonic::{Mnemonic, MnemonicLanguage};
     use tari_common_types::types::{CompressedPublicKey, PrivateKey, SignatureWithDomain};
     use tari_crypto::ristretto::RistrettoSecretKey;
     use tari_hashing::WalletMessageSigningDomain;
+    use tari_transaction_components::key_manager::TransactionKeyManagerInterface;
     use tari_utilities::hex::Hex;
     use tari_utilities::ByteArray;
 
@@ -217,14 +246,51 @@ mod tests {
         let bad_nonce = verify_message("m".into(), format!("{good_sig}|zz"), address)
             .expect_err("bad nonce hex must error");
         assert_eq!(bad_nonce.to_string(), "Signing Error: invalid public nonce");
+    }
 
-        // Second guard: the constants equal their frozen literals directly.
+    /// Dictionary words that do not decode to a cipher seed fail at the cipher-seed
+    /// step; pin the whole Dart-visible strings.
+    #[test]
+    fn cipher_seed_error_strings_are_frozen() {
+        let words = vec!["abandon".to_string(); 24];
+        let err = sign_message("m".into(), words).expect_err("bad version must error");
         assert_eq!(
-            MALFORMED_SIG_FORMAT,
-            "signature must be in '<signature_hex>|<public_nonce_hex>' format"
+            err.to_string(),
+            "Invalid Seed Words: Cipher Seed error: Invalid CipherSeed version"
         );
-        assert_eq!(INVALID_SIG_COMPONENT, "invalid signature component");
-        assert_eq!(INVALID_NONCE_COMPONENT, "invalid public nonce");
+
+        // A valid mnemonic with its last word swapped for another dictionary word
+        // breaks the checksum.
+        let mut words = random_seed_words();
+        let last = words.pop().unwrap();
+        words.push(
+            if last == "abandon" {
+                "ability"
+            } else {
+                "abandon"
+            }
+            .to_string(),
+        );
+        let err = sign_message("m".into(), words).expect_err("bad checksum must error");
+        assert_eq!(
+            err.to_string(),
+            "Invalid Seed Words: Cipher Seed error: CipherSeed CRC32 validation failed"
+        );
+    }
+
+    #[test]
+    fn view_only_error_string() {
+        assert_eq!(
+            map_signing_error(SigningError::ViewOnlyWallet).to_string(),
+            "Signing Error: View-only wallets cannot sign messages"
+        );
+        assert_eq!(
+            map_signing_error(SigningError::Db(WalletDbError::DecryptionFailed(
+                "x".to_string()
+            )))
+            .to_string(),
+            "Invalid Passphrase"
+        );
     }
 
     #[test]
@@ -236,5 +302,71 @@ mod tests {
             err.to_string().starts_with("Invalid Recipient Address: "),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn malformed_signature_format_errors() {
+        let (address, _) = valid_address_and_signature("m");
+        for bad in ["", "abc", "a|b|c"] {
+            let err = verify_message("m".into(), bad.into(), address.clone())
+                .expect_err("malformed format must error");
+            assert_eq!(
+                err.to_string(),
+                "Signing Error: signature must be in '<signature_hex>|<public_nonce_hex>' format"
+            );
+        }
+    }
+
+    #[test]
+    fn random_nonce_non_determinism_both_verify() {
+        let words = random_seed_words();
+        let address = address_for_words(&words);
+        let sig_a = sign_message("same message".into(), words.clone()).unwrap();
+        let sig_b = sign_message("same message".into(), words).unwrap();
+        // The Schnorr nonce is random, so two signatures differ, yet both verify.
+        assert_ne!(sig_a, sig_b);
+        assert!(verify_message("same message".into(), sig_a, address.clone()).unwrap());
+        assert!(verify_message("same message".into(), sig_b, address).unwrap());
+    }
+
+    #[test]
+    fn sign_output_shape_is_two_hex_halves() {
+        let out = sign_message("m".into(), random_seed_words()).unwrap();
+        let parts: Vec<&str> = out.split('|').collect();
+        assert_eq!(parts.len(), 2, "expected exactly one separator, got: {out}");
+        // 32-byte scalar and 32-byte compressed point -> 64 hex chars each.
+        for half in &parts {
+            assert_eq!(half.len(), 64, "half must be 64 hex chars: {half}");
+            assert!(half.chars().all(|c| c.is_ascii_hexdigit()));
+        }
+    }
+
+    #[test]
+    fn wallet_message_signing_domain_tag_is_frozen() {
+        // Upstream-drift tripwire: a tari_hashing change to this tag (or version)
+        // would silently break verification of signatures produced by the canonical
+        // Tari wallet, which signs under the same domain.
+        use tari_crypto::hashing::DomainSeparation;
+        assert_eq!(
+            <WalletMessageSigningDomain as DomainSeparation>::domain(),
+            "com.tari.base_layer.wallet.message_signing"
+        );
+        assert_eq!(
+            <WalletMessageSigningDomain as DomainSeparation>::version(),
+            1
+        );
+    }
+
+    #[test]
+    fn verifies_reference_tari_signature() {
+        // Cross-compat vector pinning domain-tag + "<sig_hex>|<nonce_hex>" parity.
+        // Self-generated by this crate (a fixed-key wallet signed once); it pins the
+        // domain tag and wire format, so signatures made before signing moved to
+        // minotari must still verify.
+        const MESSAGE: &str = "Tari message signing cross-compat vector";
+        // Spend key = canonical scalar bytes [42, 0, ...]; view key = [7, 0, ...].
+        const ADDRESS: &str = "1275wmA8j3bwNkY4hWGyjkq3ccB2EDZC4DEApYn1MP3B6E3Y6tsTcj8pnxPTkT3hW68wU5kZbJdjmFgkWwfPgj5QuQY";
+        const SIGNATURE: &str = "63d1199d278eab8eb2ec05844be2e4cd3c89518bd75bcf5fdfc5b06ea09dc704|862705ed9c05b18e2729a3dc0991c68d4f576ea5f1db6c45deb8d6639c10065b";
+        assert!(verify_message(MESSAGE.into(), SIGNATURE.into(), ADDRESS.into()).unwrap());
     }
 }

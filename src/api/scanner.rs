@@ -6,8 +6,12 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use flutter_rust_bridge::frb;
-use minotari_wallet::scan::{DisplayedTransactionsEvent, TransactionsUpdatedEvent};
-use minotari_wallet::{ProcessingEvent, ScanMode, ScanStatusEvent, Scanner};
+use minotari_wallet::db::WalletDbError;
+use minotari_wallet::scan::rollback_account_to_height;
+use minotari_wallet::scan::{
+    DisplayedTransactionsEvent, ReorgDetectedEvent, TransactionsUpdatedEvent,
+};
+use minotari_wallet::{ProcessingEvent, ScanError, ScanMode, ScanStatusEvent, Scanner};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -28,6 +32,8 @@ struct ScanController {
     id: u64,
     token: CancellationToken,
     forwarder: JoinHandle<()>,
+    /// Cancelled once the scan's task has returned, so [`stop_scan`] can wait for it.
+    stopped: CancellationToken,
 }
 
 /// The single process-global "current scan" slot. `None` when no scan is running.
@@ -41,20 +47,22 @@ static SCAN_STATE: RwLock<Option<ScanController>> = RwLock::new(None);
 /// can tell "is the controller in the slot still mine?".
 static SCAN_ID: AtomicU64 = AtomicU64::new(0);
 
-/// Cancel the in-flight scan, if any.
+/// Cancel the in-flight scan, if any, and wait for it to stop.
 ///
-/// Signals the current scan's cancellation token so the scan future and its event
-/// forwarder wind down. A no-op when no scan is running. Synchronous; returns once
-/// cancellation has been signalled (it does not block until the scan task exits).
+/// Signals the current scan's cancellation token and returns once the scan has
+/// actually stopped (its `start_scan` call has returned), so the wallet database is
+/// no longer being written by it. A no-op when no scan is running.
 #[frb]
-pub fn stop_scan() -> Result<()> {
-    cancel_active_scan()
+pub async fn stop_scan() -> Result<()> {
+    if let Some(stopped) = cancel_current_scan()? {
+        stopped.cancelled().await;
+    }
+    Ok(())
 }
 
 /// Cancel the in-flight scan (if any): signal its cancel token so the scan future
 /// and the forwarder both wind down, and `abort()` the forwarder as a backstop
-/// against a stuck `recv()`. Synchronous and lock-free across `.await` — it takes the
-/// controller out under a short write lock, drops the guard, then cancels/aborts.
+/// against a stuck `recv()`. Synchronous and lock-free across `.await`.
 ///
 /// Shared by [`stop_scan`] and by `disconnect_database` (graceful shutdown): tearing
 /// the DB pool out from under a live scan would make the scan fail mid-operation, so
@@ -63,20 +71,31 @@ pub fn stop_scan() -> Result<()> {
 /// runtime); cancellation is sufficient to stop further DB access, and the scan's own
 /// task clears its state on exit (`clear_scan_if_current`).
 pub(crate) fn cancel_active_scan() -> Result<()> {
-    // Take the controller out under a short write lock, then cancel/abort it
-    // *after* releasing the lock (no async work happens under the sync guard).
-    let controller = take_scan_controller()?;
-    if let Some(controller) = controller {
-        controller.token.cancel();
-        // The forwarder will observe the cancellation (token fires / `rx` closes) and
-        // finish; abort as a backstop so a stuck `recv()` can't leak the task.
-        controller.forwarder.abort();
-    }
+    cancel_current_scan()?;
     Ok(())
 }
 
-/// Remove and return the current scan controller (if any), releasing the lock
-/// before the caller does any async/cancellation work.
+/// Cancel the in-flight scan (as [`cancel_active_scan`]) and return its `stopped`
+/// token, which fires once the scan's task has returned.
+///
+/// The controller stays in the slot until the scan's own task removes it on exit, so
+/// every later `stop_scan` and every superseding scan can still wait for it.
+fn cancel_current_scan() -> Result<Option<CancellationToken>> {
+    let guard = SCAN_STATE
+        .read()
+        .map_err(|_| WalletError::internal("Failed to acquire lock"))?;
+    let Some(controller) = guard.as_ref() else {
+        return Ok(None);
+    };
+    controller.token.cancel();
+    // The forwarder will observe the cancellation (token fires / `rx` closes) and
+    // finish; abort as a backstop so a stuck `recv()` can't leak the task.
+    controller.forwarder.abort();
+    Ok(Some(controller.stopped.clone()))
+}
+
+/// Remove and return the current scan controller (if any).
+#[cfg(test)]
 fn take_scan_controller() -> Result<Option<ScanController>> {
     let mut guard = SCAN_STATE
         .write()
@@ -158,24 +177,109 @@ pub enum ScanStatusDto {
     },
 }
 
-/// Map an upstream [`ScanStatusEvent`] to the public [`ScanStatusDto`].
+/// An event streamed during [`start_scan_v2`] and [`rescan_v2`].
 ///
-/// Returns `None` for upstream status variants that intentionally have **no** Dto
-/// representation, mirroring [`map_processing_event`]'s policy: the streamed
-/// set/sequence Cake Wallet receives is frozen, so a new upstream variant must be
-/// *dropped* here rather than given a new `ScanStatusDto` variant (which would be a
-/// breaking change to the event contract).
+/// The superset of [`ScanEventDto`]: the same status, transaction and error events
+/// (flattened), plus `tip_height` on `Progress` (the height the current pass scans
+/// towards) and `ReorgDetected`. `Waiting` means the scan has caught up with the tip
+/// and is polling (continuous mode); `Completed` ends a one-shot scan; `Error` is a
+/// terminal failure (the scan also resolves to `Err`).
+#[frb]
+#[derive(Debug, Clone)]
+pub enum ScanEventV2Dto {
+    Started {
+        account_id: i64,
+        from_height: u64,
+    },
+    Progress {
+        account_id: i64,
+        current_height: u64,
+        tip_height: u64,
+        blocks_scanned: u64,
+    },
+    Completed {
+        account_id: i64,
+        final_height: u64,
+        total_blocks_scanned: u64,
+    },
+    Paused {
+        account_id: i64,
+        last_scanned_height: u64,
+        reason: String,
+    },
+    Waiting {
+        account_id: i64,
+        resume_in_seconds: u64,
+    },
+    MoreBlocksAvailable {
+        account_id: i64,
+        last_scanned_height: u64,
+    },
+    TransactionsReady(TransactionsReadyDto),
+    TransactionsUpdated(TransactionsUpdatedDto),
+    ReorgDetected(ReorgDetectedDto),
+    Error(String),
+}
+
+/// A blockchain reorganization the scan detected and rolled back, carried inside
+/// [`ScanEventV2Dto::ReorgDetected`].
 ///
-/// Currently dropped: `FastSyncPhaseStarted` / `FastSyncPhaseCompleted`. These are
+/// Blocks from `reorg_from_height` up were rolled back and the chain is now at
+/// `new_height`. `cancelled_transaction_ids` are the wallet transactions the reorg
+/// removed; `reorganized_transactions` are those whose state changed (show them as
+/// pending again, or drop them).
+#[frb]
+#[derive(Debug, Clone)]
+pub struct ReorgDetectedDto {
+    pub account_id: i64,
+    pub reorg_from_height: u64,
+    pub new_height: u64,
+    pub blocks_rolled_back: u64,
+    pub cancelled_transaction_ids: Vec<String>,
+    pub reorganized_transactions: Vec<DisplayedTransactionDto>,
+}
+
+impl From<ReorgDetectedEvent> for ReorgDetectedDto {
+    fn from(e: ReorgDetectedEvent) -> Self {
+        Self {
+            account_id: e.account_id,
+            reorg_from_height: e.reorg_from_height,
+            new_height: e.new_height,
+            blocks_rolled_back: e.blocks_rolled_back,
+            cancelled_transaction_ids: e.cancelled_transaction_ids,
+            reorganized_transactions: e
+                .reorganized_displayed_transactions
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }
+    }
+}
+
+/// Map a raw scanner [`ProcessingEvent`] to a [`ScanEventV2Dto`], the one internal
+/// event stream both scan APIs are fed from.
+///
+/// Returns `None` for events with no Dto. `BlockProcessed` is per-block bookkeeping
+/// Dart has never been shown. `FastSyncPhaseStarted` / `FastSyncPhaseCompleted` are
 /// emitted **only** under `ScanMode::FastSync` and by the separate backfill pass,
-/// neither of which this bridge ever selects ([`start_scan_with_handler`] only ever
-/// builds `ScanMode::Full` or `ScanMode::Continuous`), so in practice they are
-/// unreachable and dropping them is observationally a no-op.
+/// neither of which this bridge selects, so dropping them is observationally a no-op.
 ///
-/// This match is deliberately **exhaustive** (no `_` arm) so that a future upstream
-/// variant fails the build and forces this decision to be made explicitly again.
-fn map_scan_status_event(e: ScanStatusEvent) -> Option<ScanStatusDto> {
-    let dto = match e {
+/// Both matches are deliberately **exhaustive** (no `_` arm): a new upstream variant
+/// may well be balance- or security-relevant, and must fail the build so the
+/// drop-or-surface decision is made deliberately.
+fn map_processing_event_v2(event: ProcessingEvent) -> Option<ScanEventV2Dto> {
+    let status = match event {
+        ProcessingEvent::ScanStatus(status) => status,
+        ProcessingEvent::TransactionsReady(e) => {
+            return Some(ScanEventV2Dto::TransactionsReady(e.into()))
+        }
+        ProcessingEvent::TransactionsUpdated(e) => {
+            return Some(ScanEventV2Dto::TransactionsUpdated(e.into()))
+        }
+        ProcessingEvent::ReorgDetected(e) => return Some(ScanEventV2Dto::ReorgDetected(e.into())),
+        ProcessingEvent::BlockProcessed(_) => return None,
+    };
+    let dto = match status {
         // The exhaustive match cannot catch the *other* way this could go wrong:
         // upstream routing the Full/Continuous path through fast sync would add no
         // new variant, it would just start emitting these. Log it so that shows up
@@ -192,24 +296,26 @@ fn map_scan_status_event(e: ScanStatusEvent) -> Option<ScanStatusDto> {
         ScanStatusEvent::Started {
             account_id,
             from_height,
-        } => ScanStatusDto::Started {
+        } => ScanEventV2Dto::Started {
             account_id,
             from_height,
         },
         ScanStatusEvent::Progress {
             account_id,
             current_height,
+            tip_height,
             blocks_scanned,
-        } => ScanStatusDto::Progress {
+        } => ScanEventV2Dto::Progress {
             account_id,
             current_height,
+            tip_height,
             blocks_scanned,
         },
         ScanStatusEvent::Completed {
             account_id,
             final_height,
             total_blocks_scanned,
-        } => ScanStatusDto::Completed {
+        } => ScanEventV2Dto::Completed {
             account_id,
             final_height,
             total_blocks_scanned,
@@ -218,7 +324,7 @@ fn map_scan_status_event(e: ScanStatusEvent) -> Option<ScanStatusDto> {
             account_id,
             last_scanned_height,
             reason,
-        } => ScanStatusDto::Paused {
+        } => ScanEventV2Dto::Paused {
             account_id,
             last_scanned_height,
             reason: format!("{:?}", reason),
@@ -226,19 +332,94 @@ fn map_scan_status_event(e: ScanStatusEvent) -> Option<ScanStatusDto> {
         ScanStatusEvent::Waiting {
             account_id,
             resume_in,
-        } => ScanStatusDto::Waiting {
+        } => ScanEventV2Dto::Waiting {
             account_id,
             resume_in_seconds: resume_in.as_secs(),
         },
         ScanStatusEvent::MoreBlocksAvailable {
             account_id,
             last_scanned_height,
-        } => ScanStatusDto::MoreBlocksAvailable {
+        } => ScanEventV2Dto::MoreBlocksAvailable {
             account_id,
             last_scanned_height,
         },
     };
     Some(dto)
+}
+
+/// Narrow a [`ScanEventV2Dto`] to the frozen [`ScanEventDto`] that [`start_scan`] and
+/// [`rescan`] stream. `ReorgDetected` and `Progress.tip_height` have no place in the
+/// frozen types and are dropped, so the v1 event set is exactly what it always was.
+fn v1_event(event: ScanEventV2Dto) -> Option<ScanEventDto> {
+    let status = match event {
+        ScanEventV2Dto::Started {
+            account_id,
+            from_height,
+        } => ScanStatusDto::Started {
+            account_id,
+            from_height,
+        },
+        ScanEventV2Dto::Progress {
+            account_id,
+            current_height,
+            tip_height: _,
+            blocks_scanned,
+        } => ScanStatusDto::Progress {
+            account_id,
+            current_height,
+            blocks_scanned,
+        },
+        ScanEventV2Dto::Completed {
+            account_id,
+            final_height,
+            total_blocks_scanned,
+        } => ScanStatusDto::Completed {
+            account_id,
+            final_height,
+            total_blocks_scanned,
+        },
+        ScanEventV2Dto::Paused {
+            account_id,
+            last_scanned_height,
+            reason,
+        } => ScanStatusDto::Paused {
+            account_id,
+            last_scanned_height,
+            reason,
+        },
+        ScanEventV2Dto::Waiting {
+            account_id,
+            resume_in_seconds,
+        } => ScanStatusDto::Waiting {
+            account_id,
+            resume_in_seconds,
+        },
+        ScanEventV2Dto::MoreBlocksAvailable {
+            account_id,
+            last_scanned_height,
+        } => ScanStatusDto::MoreBlocksAvailable {
+            account_id,
+            last_scanned_height,
+        },
+        ScanEventV2Dto::TransactionsReady(e) => return Some(ScanEventDto::TransactionsReady(e)),
+        ScanEventV2Dto::TransactionsUpdated(e) => {
+            return Some(ScanEventDto::TransactionsUpdated(e))
+        }
+        ScanEventV2Dto::Error(e) => return Some(ScanEventDto::Error(e)),
+        ScanEventV2Dto::ReorgDetected(_) => return None,
+    };
+    Some(ScanEventDto::Status(status))
+}
+
+/// Wrap a v1 callback so it can be fed the internal v2 stream.
+fn v1_callback<F>(callback: F) -> impl Fn(ScanEventV2Dto) -> Result<()> + Send + Sync + 'static
+where
+    F: Fn(ScanEventDto) -> Result<()> + Send + Sync + 'static,
+{
+    move |event| match v1_event(event) {
+        Some(event) => callback(event),
+        None => Ok(()),
+    }
 }
 
 /// Newly discovered transactions, carried inside
@@ -302,33 +483,6 @@ pub struct ScanConfiguration {
     pub required_confirmations: u64,
 }
 
-/// Map a raw scanner [`ProcessingEvent`] to the public [`ScanEventDto`] the Dart
-/// side pattern-matches on. Returns `None` for processing events that intentionally
-/// have **no** Dto representation (so the streamed set/sequence Cake Wallet receives
-/// is exactly the events that already had a Dto — adding/dropping a `Some` here would
-/// change the frozen event contract; do not).
-///
-/// Like [`map_scan_status_event`], this match is **exhaustive** (no `_` arm) on
-/// purpose: a new upstream `ProcessingEvent` variant may well be balance- or
-/// security-relevant, and a wildcard would swallow it silently. Failing the build
-/// forces the drop-or-surface decision to be made deliberately.
-fn map_processing_event(event: ProcessingEvent) -> Option<ScanEventDto> {
-    match event {
-        ProcessingEvent::ScanStatus(status) => {
-            map_scan_status_event(status).map(ScanEventDto::Status)
-        }
-        ProcessingEvent::TransactionsReady(e) => Some(ScanEventDto::TransactionsReady(e.into())),
-        ProcessingEvent::TransactionsUpdated(e) => {
-            Some(ScanEventDto::TransactionsUpdated(e.into()))
-        }
-        // `BlockProcessed` is per-block bookkeeping Dart has never been shown.
-        // `ReorgDetected` carries the transactions a reorg cancelled and *would* be
-        // worth surfacing, but adding it is an additive contract change that needs
-        // Cake Wallet coordination — see the proposals list in CONTRIBUTING.md.
-        ProcessingEvent::BlockProcessed(_) | ProcessingEvent::ReorgDetected(_) => None,
-    }
-}
-
 /// The event-forwarder loop, factored out so it can be driven hermetically in tests
 /// with an in-memory channel and a fake callback.
 ///
@@ -359,7 +513,7 @@ async fn run_forwarder<F>(
     cancel_token: CancellationToken,
     callback: Arc<F>,
 ) where
-    F: Fn(ScanEventDto) -> Result<()> + Send + Sync + 'static,
+    F: Fn(ScanEventV2Dto) -> Result<()> + Send + Sync + 'static,
 {
     loop {
         let event = tokio::select! {
@@ -376,7 +530,7 @@ async fn run_forwarder<F>(
             () = cancel_token.cancelled() => break,
         };
 
-        if let Some(dto) = map_processing_event(event) {
+        if let Some(dto) = map_processing_event_v2(event) {
             if callback(dto).is_err() {
                 // The Dart StreamSink is closed. Cancel the scan (scan-cancels-on-
                 // sink-closed) and stop forwarding. We do NOT propagate this Err to
@@ -394,10 +548,38 @@ pub async fn start_scan_with_handler<F>(config: ScanConfiguration, event_callbac
 where
     F: Fn(ScanEventDto) -> Result<()> + Send + Sync + 'static,
 {
+    start_scan_v2_with_handler(config, v1_callback(event_callback)).await
+}
+
+#[frb(ignore)]
+pub async fn start_scan_v2_with_handler<F>(
+    config: ScanConfiguration,
+    event_callback: F,
+) -> Result<()>
+where
+    F: Fn(ScanEventV2Dto) -> Result<()> + Send + Sync + 'static,
+{
+    run_scan(config, None, event_callback).await
+}
+
+/// The one scan implementation behind every scan API. With `rescan_from` set, the
+/// wallet is rolled back to that height after this scan owns the slot (so any
+/// previous scan has stopped) and before scanning starts.
+async fn run_scan<F>(
+    config: ScanConfiguration,
+    rescan_from: Option<u64>,
+    event_callback: F,
+) -> Result<()>
+where
+    F: Fn(ScanEventV2Dto) -> Result<()> + Send + Sync + 'static,
+{
     let db_path = get_db_path()?;
 
     let cancel_token = CancellationToken::new();
     let scan_id = SCAN_ID.fetch_add(1, Ordering::Relaxed);
+    // Fires when this function returns on any path (or its future is dropped).
+    let stopped = CancellationToken::new();
+    let _stopped_on_return = stopped.clone().drop_guard();
 
     let mode = if config.continuous {
         ScanMode::Continuous {
@@ -416,7 +598,7 @@ where
     let scanner_builder = Scanner::new(
         &passphrase,
         &config.base_url,
-        db_path,
+        db_path.clone(),
         config.batch_size,
         config.required_confirmations,
     )
@@ -441,23 +623,43 @@ where
         id: scan_id,
         token: cancel_token.clone(),
         forwarder,
+        stopped,
     })?;
     if let Some(previous) = previous {
-        previous.token.cancel();
-        // Best-effort: let the old forwarder drain and exit; abort as a backstop.
-        previous.forwarder.abort();
-        let _ = previous.forwarder.await;
+        stop_replaced_scan(previous).await;
     }
 
-    // Best-effort: free inputs a stale reservation still holds before the scan runs.
-    // After the previous scan has been cancelled; a write batch it is still finishing
-    // can briefly hold the write lock (bounded by busy_timeout).
-    match get_db_connection() {
-        Ok(conn) => release_expired_reservations(&conn),
-        Err(e) => log::warn!("Could not check for expired UTXO reservations: {e}"),
+    // The scan future is lazy: nothing touches the chain or the DB until it is polled.
+    let result: Result<()> = async {
+        // Stopped (stop_scan, a newer scan, teardown) while waiting for the scan it
+        // replaced: leave the DB untouched.
+        if cancel_token.is_cancelled() {
+            return Ok(());
+        }
+        // Best-effort: free inputs a stale reservation still holds before the scan
+        // runs, now that the previous scan has stopped.
+        match get_db_connection() {
+            Ok(conn) => release_expired_reservations(&conn),
+            Err(e) => log::warn!("Could not check for expired UTXO reservations: {e}"),
+        }
+        if let Some(from_height) = rescan_from {
+            rollback_account_to_height(
+                db_path,
+                &passphrase,
+                &config.wallet_name,
+                from_height,
+                None,
+            )
+            .await
+            .map_err(map_rollback_error)?;
+            // Stopped (stop_scan, a newer scan, teardown) during the rollback.
+            if cancel_token.is_cancelled() {
+                return Ok(());
+            }
+        }
+        scan_future.await.map(|_| ()).map_err(|e| anyhow!(e))
     }
-
-    let result = scan_future.await;
+    .await;
 
     // Clear our state on **every** exit path (success, error, and — because this
     // runs after the await regardless of the `Result` — cancellation). Only clears
@@ -484,15 +686,22 @@ where
 
     // State is cleared *above*, before this fallible terminal-event callback, so the
     // scan slot is guaranteed empty even if `event_callback` itself fails here.
-    match result {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            // Terminal `Error` event for the stream (preserved exactly: scan failure
-            // still emits one `ScanEventDto::Error` then returns `Err`).
-            let _ = event_callback(ScanEventDto::Error(e.to_string()));
-            Err(anyhow!(e))
-        }
+    if let Err(e) = &result {
+        // Terminal `Error` event for the stream (preserved exactly: scan failure
+        // still emits one `ScanEventDto::Error` then returns `Err`).
+        let _ = event_callback(ScanEventV2Dto::Error(e.to_string()));
     }
+    result
+}
+
+/// Stop a scan this one replaced: cancel it and wait until its task has returned,
+/// so it can no longer write the DB.
+async fn stop_replaced_scan(previous: ScanController) {
+    previous.token.cancel();
+    // Best-effort: let the old forwarder drain and exit; abort as a backstop.
+    previous.forwarder.abort();
+    let _ = previous.forwarder.await;
+    previous.stopped.cancelled().await;
 }
 
 /// Scan the blockchain for the wallet's transactions, streaming progress.
@@ -522,6 +731,93 @@ pub async fn start_scan(sink: StreamSink<ScanEventDto>, config: ScanConfiguratio
             .map_err(|e| WalletError::scan(format!("{e:?}")).into())
     })
     .await
+}
+
+/// [`start_scan`] streaming [`ScanEventV2Dto`]s: the same scan, plus reorg events and
+/// the tip height in progress events.
+///
+/// Shares the scan slot with [`start_scan`] and [`rescan`] (latest wins, [`stop_scan`]
+/// stops whichever is running) and cancels when the Dart stream is closed.
+#[frb]
+pub async fn start_scan_v2(
+    sink: StreamSink<ScanEventV2Dto>,
+    config: ScanConfiguration,
+) -> Result<()> {
+    start_scan_v2_with_handler(config, move |event| {
+        sink.add(event)
+            .map_err(|e| WalletError::scan(format!("{e:?}")).into())
+    })
+    .await
+}
+
+/// Roll the wallet back to `from_height` and scan again from there, streaming the
+/// same [`ScanEventDto`]s as [`start_scan`].
+///
+/// `config` is used exactly as by [`start_scan`] (its `wallet_name` selects the
+/// account, its `passphrase` must decrypt it). Any running scan is stopped, and
+/// waited for, first. The rollback is done by minotari and committed before scanning
+/// starts; if the scan then fails, the wallet stays rolled back until a later scan
+/// covers the range. A wrong passphrase errors as `Invalid Passphrase` (streamed as
+/// the terminal error event too) and changes nothing.
+/// Requires [`initialize_database`] first.
+#[frb]
+pub async fn rescan(
+    sink: StreamSink<ScanEventDto>,
+    from_height: u64,
+    config: ScanConfiguration,
+) -> Result<()> {
+    rescan_with_handler(from_height, config, move |event| {
+        sink.add(event)
+            .map_err(|e| WalletError::scan(format!("{e:?}")).into())
+    })
+    .await
+}
+
+#[frb(ignore)]
+pub async fn rescan_with_handler<F>(
+    from_height: u64,
+    config: ScanConfiguration,
+    event_callback: F,
+) -> Result<()>
+where
+    F: Fn(ScanEventDto) -> Result<()> + Send + Sync + 'static,
+{
+    rescan_v2_with_handler(from_height, config, v1_callback(event_callback)).await
+}
+
+/// [`rescan`] streaming [`ScanEventV2Dto`]s, as [`start_scan_v2`] does.
+#[frb]
+pub async fn rescan_v2(
+    sink: StreamSink<ScanEventV2Dto>,
+    from_height: u64,
+    config: ScanConfiguration,
+) -> Result<()> {
+    rescan_v2_with_handler(from_height, config, move |event| {
+        sink.add(event)
+            .map_err(|e| WalletError::scan(format!("{e:?}")).into())
+    })
+    .await
+}
+
+#[frb(ignore)]
+pub async fn rescan_v2_with_handler<F>(
+    from_height: u64,
+    config: ScanConfiguration,
+    event_callback: F,
+) -> Result<()>
+where
+    F: Fn(ScanEventV2Dto) -> Result<()> + Send + Sync + 'static,
+{
+    run_scan(config, Some(from_height), event_callback).await
+}
+
+/// A wrong passphrase is reported as such; every other rollback failure is a
+/// database error carrying minotari's message.
+fn map_rollback_error(e: ScanError) -> WalletError {
+    match e {
+        ScanError::DbError(WalletDbError::DecryptionFailed(_)) => WalletError::InvalidPassphrase,
+        other => WalletError::database(other.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -560,9 +856,31 @@ mod tests {
                 id,
                 token: token.clone(),
                 forwarder,
+                stopped: CancellationToken::new(),
             },
             token,
         )
+    }
+
+    /// A stand-in scan task: winds down a little after it is cancelled, then clears
+    /// its slot and fires `stopped`, as `run_scan` does on exit.
+    fn spawn_stand_in_scan(
+        id: u64,
+        token: CancellationToken,
+        stopped: CancellationToken,
+    ) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            token.cancelled().await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = clear_scan_if_current(id);
+            stopped.cancel();
+        })
+    }
+
+    /// Run `stop_scan` and report whether the scan had stopped by the time it returned.
+    async fn stop_and_check(stopped: CancellationToken) -> bool {
+        stop_scan().await.unwrap();
+        stopped.is_cancelled()
     }
 
     #[tokio::test]
@@ -665,6 +983,170 @@ mod tests {
                 "slot must be cleared regardless of scan outcome (id={id})"
             );
         }
+
+        // --- Scenario 5: stop_scan returns only once the scan has stopped ---
+        let _ = take_scan_controller().unwrap();
+        let token = CancellationToken::new();
+        let stopped = CancellationToken::new();
+        install_scan_controller(ScanController {
+            id: 40,
+            token: token.clone(),
+            forwarder: spawn_forwarder(token.clone()),
+            stopped: stopped.clone(),
+        })
+        .unwrap();
+        let scan_task = spawn_stand_in_scan(40, token, stopped.clone());
+        // Two concurrent stops: both return only once the scan has stopped.
+        let stops = [
+            tokio::spawn(stop_and_check(stopped.clone())),
+            tokio::spawn(stop_and_check(stopped.clone())),
+        ];
+        for stop in stops {
+            assert!(
+                stop.await.unwrap(),
+                "stop_scan must wait for the scan to stop"
+            );
+        }
+        assert!(take_scan_controller().unwrap().is_none());
+        scan_task.await.unwrap();
+
+        // --- Scenario 5b: a scan started after cancel_active_scan waits for it ---
+        let token = CancellationToken::new();
+        let stopped = CancellationToken::new();
+        install_scan_controller(ScanController {
+            id: 45,
+            token: token.clone(),
+            forwarder: spawn_forwarder(token.clone()),
+            stopped: stopped.clone(),
+        })
+        .unwrap();
+        let scan_task = spawn_stand_in_scan(45, token, stopped.clone());
+        cancel_active_scan().unwrap();
+        // A stop after the cancel still finds the scan and waits for it.
+        assert!(stop_and_check(stopped.clone()).await);
+        scan_task.await.unwrap();
+
+        let token = CancellationToken::new();
+        let stopped = CancellationToken::new();
+        install_scan_controller(ScanController {
+            id: 46,
+            token: token.clone(),
+            forwarder: spawn_forwarder(token.clone()),
+            stopped: stopped.clone(),
+        })
+        .unwrap();
+        let scan_task = spawn_stand_in_scan(46, token, stopped.clone());
+        cancel_active_scan().unwrap();
+        // The next scan finds the cancelled one in the slot and waits for it.
+        let (next, _next_token) = make_controller(47);
+        let previous = install_scan_controller(next)
+            .unwrap()
+            .expect("the cancelled scan is still in the slot");
+        stop_replaced_scan(previous).await;
+        assert!(
+            stopped.is_cancelled(),
+            "the new scan waited for the cancelled one"
+        );
+        scan_task.await.unwrap();
+        let _ = take_scan_controller().unwrap();
+
+        // With no scan running, stop_scan returns at once.
+        stop_scan().await.unwrap();
+
+        // --- Scenario 6: a replaced scan is awaited until it has stopped ---
+        let token = CancellationToken::new();
+        let stopped = CancellationToken::new();
+        let replaced = ScanController {
+            id: 50,
+            token: token.clone(),
+            forwarder: spawn_forwarder(token.clone()),
+            stopped: stopped.clone(),
+        };
+        let scan_task = {
+            let stopped = stopped.clone();
+            tokio::spawn(async move {
+                token.cancelled().await;
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                stopped.cancel();
+            })
+        };
+        stop_replaced_scan(replaced).await;
+        assert!(
+            stopped.is_cancelled(),
+            "a superseding scan must wait for the replaced scan to stop"
+        );
+        scan_task.await.unwrap();
+    }
+
+    /// A rescan stopped while it waits for the scan it replaced must not roll back.
+    /// The wallet does not exist, so a rollback would fail with "Account not found";
+    /// the rescan returning `Ok` with no events proves it never reached the DB.
+    #[tokio::test]
+    async fn rescan_cancelled_while_waiting_does_not_roll_back() {
+        let _guard = crate::api::db::GLOBAL_STATE_TEST_LOCK.lock().await;
+        let _ = take_scan_controller().unwrap();
+        let db_path =
+            std::env::temp_dir().join(format!("cw-rescan-cancel-{}.db", std::process::id()));
+        crate::api::db::initialize_database(db_path.to_string_lossy().to_string()).unwrap();
+
+        // A predecessor that only stops when told to.
+        let token = CancellationToken::new();
+        let predecessor_stopped = CancellationToken::new();
+        install_scan_controller(ScanController {
+            id: u64::MAX,
+            token: token.clone(),
+            forwarder: spawn_forwarder(token),
+            stopped: predecessor_stopped.clone(),
+        })
+        .unwrap();
+
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let rescan = {
+            let events = events.clone();
+            tokio::spawn(rescan_v2_with_handler(
+                0,
+                ScanConfiguration {
+                    wallet_name: "missing".to_string(),
+                    passphrase: String::new(),
+                    base_url: "http://127.0.0.1:1".to_string(),
+                    batch_size: 10,
+                    continuous: false,
+                    poll_interval_seconds: 1,
+                    required_confirmations: 3,
+                },
+                move |event| {
+                    events.lock().unwrap().push(event);
+                    Ok(())
+                },
+            ))
+        };
+        let slot_id = || SCAN_STATE.read().unwrap().as_ref().map(|c| c.id);
+        // Wait until the rescan holds the slot (and so waits on the predecessor).
+        while slot_id() == Some(u64::MAX) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let stop = tokio::spawn(stop_scan());
+        let rescan_cancelled = || {
+            SCAN_STATE
+                .read()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|c| c.token.is_cancelled())
+        };
+        while !rescan_cancelled() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        predecessor_stopped.cancel();
+
+        rescan
+            .await
+            .unwrap()
+            .expect("a cancelled rescan returns Ok without a rollback");
+        stop.await.unwrap().unwrap();
+        assert!(events.lock().unwrap().is_empty(), "nothing was streamed");
+
+        crate::api::db::disconnect_database().unwrap();
+        let _ = std::fs::remove_file(&db_path);
     }
 
     // --- run_forwarder async/stream-lifecycle tests -----------------------------
@@ -734,7 +1216,11 @@ mod tests {
         let token = CancellationToken::new();
         let sink = FakeSink::new(false);
 
-        let handle = tokio::spawn(run_forwarder(rx, token.clone(), Arc::new(sink.callback())));
+        let handle = tokio::spawn(run_forwarder(
+            rx,
+            token.clone(),
+            Arc::new(v1_callback(sink.callback())),
+        ));
 
         tx.send(started_event(1, 100)).unwrap();
         tx.send(completed_event(1, 110)).unwrap();
@@ -767,7 +1253,11 @@ mod tests {
         let token = CancellationToken::new();
         let sink = FakeSink::new(false);
 
-        let handle = tokio::spawn(run_forwarder(rx, token.clone(), Arc::new(sink.callback())));
+        let handle = tokio::spawn(run_forwarder(
+            rx,
+            token.clone(),
+            Arc::new(v1_callback(sink.callback())),
+        ));
 
         token.cancel();
         // Must complete despite `tx` still being alive (channel open).
@@ -783,7 +1273,11 @@ mod tests {
         let token = CancellationToken::new();
         let sink = FakeSink::new(true); // callback returns Err
 
-        let handle = tokio::spawn(run_forwarder(rx, token.clone(), Arc::new(sink.callback())));
+        let handle = tokio::spawn(run_forwarder(
+            rx,
+            token.clone(),
+            Arc::new(v1_callback(sink.callback())),
+        ));
 
         tx.send(started_event(1, 100)).unwrap();
         handle.await.unwrap();
@@ -809,34 +1303,130 @@ mod tests {
     #[test]
     fn fast_sync_status_events_have_no_dto_representation() {
         assert!(
-            map_scan_status_event(ScanStatusEvent::FastSyncPhaseStarted {
-                account_id: 1,
-                phase: FastSyncPhase::FastUtxoScan,
-                from_height: 100,
-                to_height: Some(200),
-            })
+            map_processing_event_v2(ProcessingEvent::ScanStatus(
+                ScanStatusEvent::FastSyncPhaseStarted {
+                    account_id: 1,
+                    phase: FastSyncPhase::FastUtxoScan,
+                    from_height: 100,
+                    to_height: Some(200),
+                }
+            ))
             .is_none(),
             "FastSyncPhaseStarted must not surface to Dart"
         );
         assert!(
-            map_scan_status_event(ScanStatusEvent::FastSyncPhaseCompleted {
-                account_id: 1,
-                phase: FastSyncPhase::FastUtxoScan,
-            })
+            map_processing_event_v2(ProcessingEvent::ScanStatus(
+                ScanStatusEvent::FastSyncPhaseCompleted {
+                    account_id: 1,
+                    phase: FastSyncPhase::FastUtxoScan,
+                }
+            ))
             .is_none(),
             "FastSyncPhaseCompleted must not surface to Dart"
         );
 
         // ...while the contract's own variants still map through unchanged.
         assert!(matches!(
-            map_scan_status_event(ScanStatusEvent::Started {
-                account_id: 1,
-                from_height: 100,
-            }),
-            Some(ScanStatusDto::Started {
+            map_processing_event_v2(started_event(1, 100)).and_then(v1_event),
+            Some(ScanEventDto::Status(ScanStatusDto::Started {
                 account_id: 1,
                 from_height: 100
+            }))
+        ));
+    }
+
+    fn reorg_event() -> ProcessingEvent {
+        ProcessingEvent::ReorgDetected(ReorgDetectedEvent {
+            account_id: 1,
+            reorg_from_height: 95,
+            new_height: 97,
+            blocks_rolled_back: 6,
+            invalidated_output_hashes: Vec::new(),
+            cancelled_transaction_ids: vec!["tx-1".to_string(), "tx-2".to_string()],
+            reorganized_displayed_transactions: Vec::new(),
+        })
+    }
+
+    fn progress_event() -> ProcessingEvent {
+        ProcessingEvent::ScanStatus(ScanStatusEvent::Progress {
+            account_id: 1,
+            current_height: 100,
+            tip_height: 250,
+            blocks_scanned: 10,
+        })
+    }
+
+    /// A reorg and the scan tip reach a v2 sink, in order, through the forwarder.
+    #[tokio::test]
+    async fn v2_forwarder_delivers_reorg_and_tip() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let token = CancellationToken::new();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let callback = {
+            let received = received.clone();
+            move |event: ScanEventV2Dto| -> Result<()> {
+                received.lock().unwrap().push(event);
+                Ok(())
+            }
+        };
+        let handle = tokio::spawn(run_forwarder(rx, token.clone(), Arc::new(callback)));
+
+        tx.send(progress_event()).unwrap();
+        tx.send(reorg_event()).unwrap();
+        drop(tx);
+        handle.await.unwrap();
+
+        let got = received.lock().unwrap();
+        assert_eq!(got.len(), 2);
+        assert!(matches!(
+            got[0],
+            ScanEventV2Dto::Progress {
+                current_height: 100,
+                tip_height: 250,
+                ..
+            }
+        ));
+        let ScanEventV2Dto::ReorgDetected(reorg) = &got[1] else {
+            panic!("expected a reorg, got {:?}", got[1]);
+        };
+        assert_eq!(reorg.reorg_from_height, 95);
+        assert_eq!(reorg.new_height, 97);
+        assert_eq!(reorg.blocks_rolled_back, 6);
+        assert_eq!(reorg.cancelled_transaction_ids, vec!["tx-1", "tx-2"]);
+    }
+
+    /// The v1 path, fed from the same stream, still drops the reorg and keeps the
+    /// frozen `Progress` shape.
+    #[tokio::test]
+    async fn v1_forwarder_still_drops_reorg() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let token = CancellationToken::new();
+        let sink = FakeSink::new(false);
+        let handle = tokio::spawn(run_forwarder(
+            rx,
+            token.clone(),
+            Arc::new(v1_callback(sink.callback())),
+        ));
+
+        tx.send(progress_event()).unwrap();
+        tx.send(reorg_event()).unwrap();
+        tx.send(completed_event(1, 110)).unwrap();
+        drop(tx);
+        handle.await.unwrap();
+
+        let got = sink.received.lock().unwrap();
+        assert_eq!(got.len(), 2, "the reorg must not reach a v1 sink");
+        assert!(matches!(
+            got[0],
+            ScanEventDto::Status(ScanStatusDto::Progress {
+                current_height: 100,
+                blocks_scanned: 10,
+                ..
             })
+        ));
+        assert!(matches!(
+            got[1],
+            ScanEventDto::Status(ScanStatusDto::Completed { .. })
         ));
     }
 
@@ -848,12 +1438,16 @@ mod tests {
         let token = CancellationToken::new();
         let sink = FakeSink::new(false);
 
-        let handle = tokio::spawn(run_forwarder(rx, token.clone(), Arc::new(sink.callback())));
+        let handle = tokio::spawn(run_forwarder(
+            rx,
+            token.clone(),
+            Arc::new(v1_callback(sink.callback())),
+        ));
 
         // A BlockProcessed event maps to None; sandwich it between two mapped events
         // to prove it's silently skipped and ordering is preserved.
         tx.send(started_event(1, 100)).unwrap();
-        // `map_processing_event` returns None for any non-Status/-Ready/-Updated event.
+        // `BlockProcessed` has no Dto in either stream.
         tx.send(ProcessingEvent::BlockProcessed(BlockProcessedEvent {
             account_id: 1,
             height: 105,

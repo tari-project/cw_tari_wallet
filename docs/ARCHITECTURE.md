@@ -105,7 +105,8 @@ task. Each controller carries a monotonic `id`.
   cancels + awaits the one it replaced, so a superseded scan never orphans its
   forwarder task.
 - **Tracked task.** The forwarder handle is tracked (not detached), so `stop_scan`
-  and teardown can cancel and join it.
+  and teardown can cancel and join it. `stop_scan` (and `rescan`) also wait for the
+  scan's own task to return, via the controller's `stopped` token.
 - **Safe clean-up.** A scan only clears the slot if it still holds *its own*
   controller (matched by `id`), so a scan that has already been superseded never
   clobbers its successor.
