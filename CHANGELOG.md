@@ -51,7 +51,10 @@ All new; no existing function, type, field, variant or error string changed.
   Resolves to the new `SendResultDto { transaction, acceptedByNode, note?,
   nodeReason? }`: when `acceptedByNode` is `false` the send is recorded and
   rebroadcast by the wallet, so show `note` and never resend. `nodeReason` is the
-  node's text with Unicode format characters (bidi overrides, zero-width) removed.
+  node's text with invisible characters (bidi overrides, zero-width, line
+  separators, fillers, variation selectors) removed; the same cleaning applies to
+  node text in `get_height_at_time` and send-broadcast `Network Error`s and in the
+  scans' terminal `error` event.
   Empty `seedWords` signs with the stored wallet's keys (wrong passphrase →
   `Invalid Passphrase`; view-only wallet → `Signing Error: View-only wallets
   cannot send`, before anything is locked); that is how a key-imported wallet sends.
@@ -62,9 +65,13 @@ All new; no existing function, type, field, variant or error string changed.
   stalls, `abandon_send` gives it up and releases its inputs, via minotari. There
   is no force option: a send reset by a rescan or reorg can look unmined, and a
   mined send never stalls. Any running scan is stopped first so its rebroadcast
-  cannot race the abandon; start it again afterwards. The original can still be
-  mined if a node holds it, so do not pay the same payee again until it shows as
-  rejected. Errors: `Invalid Passphrase`, `No accounts found for this wallet`,
+  cannot race the abandon, and a scan started meanwhile waits until it is done;
+  start it again afterwards. The original can still be mined if a node holds it:
+  right after an abandon, `Rejected` means "not known to be mined", not "will not
+  be mined", so do not treat it as proof until later scans from a trusted node. If
+  paying again, prefer a send that spends the same inputs (minotari's largest-first
+  selection usually picks the released inputs again, so a same-amount resend
+  normally conflicts with the original rather than paying twice). Errors: `Invalid Passphrase`, `No accounts found for this wallet`,
   `Wallet Error: Invalid transaction id`, `Wallet Error: The send has not stalled
   yet; keep scanning so the wallet rebroadcasts it`, `Wallet Error: …` (unknown
   send, already mined, input spent, change in use or on chain, no change output).
@@ -72,8 +79,10 @@ All new; no existing function, type, field, variant or error string changed.
   → `FeeEstimate`.
 - `estimate_send_all_fee(walletName, recipientAddress, paymentId?, network?, confirmationWindow?)` →
   new `SendAllFeeEstimate { fee, amountAfterFee, inputCount, skippedDust, skippedOverCap }`.
-- `change_passphrase(walletName, oldPassphrase, newPassphrase)` (async): stops
-  any running scan first; a wrong old passphrase errors as `Invalid Passphrase`.
+- `change_passphrase(walletName, oldPassphrase, newPassphrase)` (async): checks
+  the old passphrase first (`Invalid Passphrase`, leaving a running scan alone;
+  unknown wallet → `No accounts found for this wallet`), then stops any running
+  scan and keeps new scans waiting until the rewrite is done.
 - `import_wallet_from_keys(walletName, viewPrivateKeyHex, spendPrivateKeyHex, birthday, passphrase, network?)`
   → `WalletCreationDetails` (spendable through `send_transaction_multi` with empty
   `seedWords`; `seedWords` in the result is `null`).
@@ -82,8 +91,10 @@ All new; no existing function, type, field, variant or error string changed.
   `start_scan` does. A wrong passphrase errors as `Invalid Passphrase` (also
   streamed as the terminal `error` event).
 - New `height` module: `get_height_at_time(baseUrl, epochSecs, network?)` (async;
-  refuses a node height more than 10% plus a day of blocks above the offline
-  estimate as `Network Error: Node reported an implausible height …`),
+  refuses a node height more than two days of blocks above the offline estimate as
+  `Network Error: Node reported an implausible height …`; the estimate runs high,
+  about 17 days of blocks by September 2026, so a hostile node can still push a
+  start that far plus two days late),
   `estimate_height_at_time(network?, epochSecs)`, `birthday_from_height(network?, height)`
   and `birthday_from_date(epochSecs)` (all three sync, offline).
 - `current_network()` (sync) → `TariNetwork?`: the network this process is locked to.
@@ -110,7 +121,9 @@ All new; no existing function, type, field, variant or error string changed.
 - Bumped the `minotari-cli` git pin from `1ab7c8c` to `86503ff` (0.6.0: send-all,
   multiple recipients, passphrase change, key restore, rescan, height-by-date, scan
   progress with tip and reorg events) and the `tari_*` crates from `=6.2.0-pre.1`
-  to `=6.3.0-pre.1` (still exact pins).
+  to `=6.3.0-pre.1` (still exact pins). minotari now uses `utoipa-swagger-ui` 10
+  (zip 9), so the three zip advisory ignores were pruned from `deny.toml`; `rand`
+  was bumped within range to 0.8.6 / 0.9.3.
   **Behaviour change Cake Wallet must sign off** (introduced by the `1ab7c8c` bump
   below, still true): `send_transaction` resolves `Ok` for a send the node does not
   accept on first broadcast (or cannot be reached for), instead of failing with
