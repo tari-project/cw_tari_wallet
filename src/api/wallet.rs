@@ -1,7 +1,7 @@
 use crate::api::db::{get_db_connection, get_db_path};
 use crate::api::error::WalletError;
 use crate::api::network::{apply_network, parse_network, TariNetwork};
-use crate::api::scanner::stop_scan;
+use crate::api::scanner::{begin_maintenance, stop_scan};
 use crate::domain::address::{construct_wallet_address_details, split_hidden_words};
 use crate::domain::keys::key_manager_from_cipher_seed;
 use anyhow::{Context, Result};
@@ -208,9 +208,11 @@ pub fn import_wallet_from_keys(
 /// Re-encrypt wallet `wallet_name` under `new_passphrase`.
 ///
 /// `old_passphrase` and `new_passphrase` are **secret**. A wrong `old_passphrase`
-/// errors as `Invalid Passphrase` and changes nothing. Any running scan is stopped
-/// (and waited for) first, so it neither reads the old passphrase's keys nor holds
-/// the database while it is rewritten; start it again with the new passphrase.
+/// errors as `Invalid Passphrase` and changes nothing (a running scan keeps running).
+/// Otherwise any running scan is stopped (and waited for) first, and a scan started
+/// meanwhile waits until the change is done, so no scan reads the old passphrase's
+/// keys or holds the database while it is rewritten; start it again with the new
+/// passphrase. An unknown wallet errors as `No accounts found for this wallet`.
 /// Requires [`initialize_database`] first.
 #[frb]
 pub async fn change_passphrase(
@@ -220,6 +222,22 @@ pub async fn change_passphrase(
 ) -> Result<()> {
     let old_passphrase = Zeroizing::new(old_passphrase);
     let new_passphrase = Zeroizing::new(new_passphrase);
+
+    // Check the old passphrase before touching a running scan.
+    {
+        let conn = get_db_connection()?;
+        let accounts = get_accounts(&conn, Some(&wallet_name))?;
+        let account = accounts.first().ok_or(WalletError::NoAccounts)?;
+        account
+            .decrypt_wallet_type(&old_passphrase)
+            .map_err(|e| match e {
+                WalletDbError::DecryptionFailed(_) => WalletError::InvalidPassphrase,
+                other => WalletError::database(other.to_string()),
+            })?;
+    }
+
+    // Stop the scan, and keep new scans out until the rewrite is done.
+    let _maintenance = begin_maintenance().await;
     stop_scan().await?;
     let mut conn = get_db_connection()?;
 

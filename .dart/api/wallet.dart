@@ -94,9 +94,11 @@ Future<WalletCreationDetails> importWalletFromKeys(
 /// Re-encrypt wallet `wallet_name` under `new_passphrase`.
 ///
 /// `old_passphrase` and `new_passphrase` are **secret**. A wrong `old_passphrase`
-/// errors as `Invalid Passphrase` and changes nothing. Any running scan is stopped
-/// (and waited for) first, so it neither reads the old passphrase's keys nor holds
-/// the database while it is rewritten; start it again with the new passphrase.
+/// errors as `Invalid Passphrase` and changes nothing (a running scan keeps running).
+/// Otherwise any running scan is stopped (and waited for) first, and a scan started
+/// meanwhile waits until the change is done, so no scan reads the old passphrase's
+/// keys or holds the database while it is rewritten; start it again with the new
+/// passphrase. An unknown wallet errors as `No accounts found for this wallet`.
 /// Requires [`initialize_database`] first.
 Future<void> changePassphrase(
         {required String walletName,

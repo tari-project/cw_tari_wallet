@@ -22,8 +22,9 @@ import 'transactions.dart';
 /// first). A mined send never stalls. A send without a change output is always
 /// refused. Returns what abandoning does not do.
 ///
-/// Any running scan is stopped (and waited for) first, so its rebroadcast cannot race
-/// the abandon; start the scan again afterwards.
+/// Any running scan is stopped (and waited for) first, and a scan started meanwhile
+/// waits until the abandon is done, so no rebroadcast races it; start the scan again
+/// afterwards.
 ///
 /// The original can still be mined if a node holds it: do not pay the same payee
 /// again until the abandoned send shows as rejected after later scans.

@@ -44,6 +44,18 @@ struct ScanController {
 /// could deadlock the async runtime.
 static SCAN_STATE: RwLock<Option<ScanController>> = RwLock::new(None);
 
+/// Held by a wallet maintenance operation (`abandon_send`, `change_passphrase`) from
+/// stopping the scan until its DB write is done, and taken briefly by a starting scan
+/// before it installs itself, so no scan starts in between. [`stop_scan`] never takes
+/// it.
+static MAINTENANCE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Start a maintenance operation: no scan can start until the guard is dropped.
+/// Stop the running scan (if any) after taking it.
+pub(crate) async fn begin_maintenance() -> tokio::sync::MutexGuard<'static, ()> {
+    MAINTENANCE.lock().await
+}
+
 /// Hands out a unique, monotonically increasing id per `start_scan` so clean-up
 /// can tell "is the controller in the slot still mine?".
 static SCAN_ID: AtomicU64 = AtomicU64::new(0);
@@ -620,12 +632,15 @@ where
     // *previous* scan that was never stopped: preserve "latest scan wins" by
     // cleanly cancelling and awaiting it here (the original code silently
     // overwrote the slot, orphaning the old scan's forwarder task).
+    // Wait out a maintenance operation in progress before taking the slot.
+    let maintenance = MAINTENANCE.lock().await;
     let previous = install_scan_controller(ScanController {
         id: scan_id,
         token: cancel_token.clone(),
         forwarder,
         stopped,
     })?;
+    drop(maintenance);
     if let Some(previous) = previous {
         stop_replaced_scan(previous).await;
     }
@@ -1148,6 +1163,43 @@ mod tests {
             .expect("a cancelled rescan returns Ok without a rollback");
         stop.await.unwrap().unwrap();
         assert!(events.lock().unwrap().is_empty(), "nothing was streamed");
+
+        crate::api::db::disconnect_database().unwrap();
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    /// A scan started while a maintenance operation holds the guard does not take
+    /// the slot (or touch the DB) until the guard is dropped.
+    #[tokio::test]
+    async fn scan_waits_for_maintenance() {
+        let _guard = crate::api::db::GLOBAL_STATE_TEST_LOCK.lock().await;
+        let _ = take_scan_controller().unwrap();
+        let db_path =
+            std::env::temp_dir().join(format!("cw-maintenance-{}.db", std::process::id()));
+        crate::api::db::initialize_database(db_path.to_string_lossy().to_string()).unwrap();
+
+        let maintenance = begin_maintenance().await;
+        // A rescan of a missing wallet fails as soon as it reaches the DB.
+        let rescan = tokio::spawn(rescan_v2_with_handler(
+            0,
+            ScanConfiguration {
+                wallet_name: "missing".to_string(),
+                passphrase: String::new(),
+                base_url: "http://127.0.0.1:1".to_string(),
+                batch_size: 10,
+                continuous: false,
+                poll_interval_seconds: 1,
+                required_confirmations: 3,
+            },
+            |_| Ok(()),
+        ));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!rescan.is_finished(), "the scan waits for the maintenance");
+        assert!(SCAN_STATE.read().unwrap().is_none(), "nor takes the slot");
+
+        drop(maintenance);
+        let err = rescan.await.unwrap().expect_err("then it runs and fails");
+        assert!(err.to_string().contains("Account not found"), "got {err}");
 
         crate::api::db::disconnect_database().unwrap();
         let _ = std::fs::remove_file(&db_path);

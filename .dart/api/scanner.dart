@@ -9,7 +9,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 import 'transactions.dart';
 part 'scanner.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `cancel_active_scan`, `cancel_current_scan`, `clear_scan_if_current`, `install_scan_controller`, `map_processing_event_v2`, `map_rollback_error`, `run_forwarder`, `run_scan`, `stop_replaced_scan`, `v1_callback`, `v1_event`
+// These functions are ignored because they are not marked as `pub`: `begin_maintenance`, `cancel_active_scan`, `cancel_current_scan`, `clear_scan_if_current`, `install_scan_controller`, `map_processing_event_v2`, `map_rollback_error`, `run_forwarder`, `run_scan`, `stop_replaced_scan`, `v1_callback`, `v1_event`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ScanController`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `rescan_v2_with_handler`, `rescan_with_handler`, `start_scan_v2_with_handler`, `start_scan_with_handler`

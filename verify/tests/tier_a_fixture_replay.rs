@@ -376,17 +376,8 @@ fn change_passphrase_reencrypts_the_wallet() {
     let before = address_with("").expect("old passphrase opens the wallet");
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
 
-    let err = runtime
-        .block_on(change_passphrase(
-            fixture::WALLET_NAME.to_string(),
-            "wrong".to_string(),
-            "new".to_string(),
-        ))
-        .expect_err("a wrong old passphrase must be refused");
-    assert_eq!(err.to_string(), "Invalid Passphrase");
-    address_with("").expect("a refused change leaves the old passphrase working");
-
-    // A continuous scan is running; changing the passphrase stops it first.
+    // A continuous scan is running. A wrong old passphrase leaves it running; a
+    // right one stops it before the change.
     runtime.block_on(async {
         let server = mock_chain_node().await;
         let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -399,6 +390,26 @@ fn change_passphrase_reencrypts_the_wallet() {
             Ok(())
         }));
         seen_rx.recv().await.expect("the scan is running");
+
+        let err = change_passphrase(
+            fixture::WALLET_NAME.to_string(),
+            "wrong".to_string(),
+            "new".to_string(),
+        )
+        .await
+        .expect_err("a wrong old passphrase must be refused");
+        assert_eq!(err.to_string(), "Invalid Passphrase");
+        assert!(
+            !matches!(
+                seen_rx.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+            ),
+            "a refused change leaves the scan running"
+        );
+        assert!(
+            !scan.is_finished(),
+            "a refused change leaves the scan running"
+        );
 
         change_passphrase(
             fixture::WALLET_NAME.to_string(),

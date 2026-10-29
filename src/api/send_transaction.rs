@@ -5,7 +5,7 @@ use crate::api::config::{
 use crate::api::db::{get_db_connection, get_db_pool, release_expired_reservations};
 use crate::api::error::WalletError;
 use crate::api::network::{apply_network, parse_network, TariNetwork};
-use crate::api::scanner::stop_scan;
+use crate::api::scanner::{begin_maintenance, stop_scan};
 use crate::api::transactions::DisplayedTransactionDto;
 use crate::domain::keys::key_manager_from_seed_words;
 use crate::domain::text::strip_format_chars;
@@ -185,8 +185,9 @@ const NOT_STALLED: &str =
 /// first). A mined send never stalls. A send without a change output is always
 /// refused. Returns what abandoning does not do.
 ///
-/// Any running scan is stopped (and waited for) first, so its rebroadcast cannot race
-/// the abandon; start the scan again afterwards.
+/// Any running scan is stopped (and waited for) first, and a scan started meanwhile
+/// waits until the abandon is done, so no rebroadcast races it; start the scan again
+/// afterwards.
 ///
 /// The original can still be mined if a node holds it: do not pay the same payee
 /// again until the abandoned send shows as rejected after later scans.
@@ -221,7 +222,9 @@ pub async fn abandon_send(
         account.id
     };
 
-    // Rebroadcasts only happen inside a scan; stop it so none races the abandon.
+    // Rebroadcasts only happen inside a scan; stop it, and keep new scans out, so
+    // none races the abandon.
+    let _maintenance = begin_maintenance().await;
     stop_scan().await?;
 
     let mut conn = get_db_connection()?;
