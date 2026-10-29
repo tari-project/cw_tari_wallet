@@ -161,9 +161,16 @@ change).
 
 ## Streaming / async contract
 
-Two functions stream progress to Dart over an FRB `StreamSink`:
-`send_transaction` (events: `SendTransactionEvent`) and `start_scan` (events:
-`ScanEventDto`). The async/stream behavior is observable and therefore frozen.
+Six functions stream progress to Dart over an FRB `StreamSink`:
+`send_transaction` and `send_transaction_multi` (events: `SendTransactionEvent`),
+`start_scan` and `rescan` (events: `ScanEventDto`), and `start_scan_v2` and
+`rescan_v2` (events: `ScanEventV2Dto`). The async/stream behavior is observable and
+therefore frozen.
+
+- **One scan stream.** All four scan functions run the same scan (`run_scan`) and
+  share the one scan slot. The scanner's events are mapped once to
+  `ScanEventV2Dto`; the v1 functions narrow that to `ScanEventDto`, dropping
+  `ReorgDetected` and `Progress.tip_height`, so their event set is unchanged.
 
 - **Ordering & backpressure (scan).** The scanner emits over an **unbounded**
   `mpsc` channel, so the producer never blocks and **no event is dropped** — events
@@ -173,16 +180,19 @@ Two functions stream progress to Dart over an FRB `StreamSink`:
   never dropped.
 - **Cancellation.** A scan ends when its `rx` closes (drains queued events first,
   including the terminal status), when the cancel token fires (`stop_scan`, a
-  superseding scan, or teardown), or when the Dart sink is closed.
+  superseding scan, or teardown), or when the Dart sink is closed. `stop_scan`
+  returns only once the scan, and any scan it replaced, has stopped.
 - **Sink-closed semantics — deliberately asymmetric:**
-  - **Scan cancels on a closed sink** — a scan with no listener has no useful work.
-  - **Send continues on a closed sink** — a half-built/half-broadcast transaction
-    must finish (aborting it could lose funds).
+  - **Scan cancels on a closed sink** (`start_scan`, `rescan` and their v2 forms) —
+    a scan with no listener has no useful work.
+  - **Send continues on a closed sink** (`send_transaction`,
+    `send_transaction_multi`) — a half-built/half-broadcast transaction must finish
+    (aborting it could lose funds).
 
   These two are intentionally different; unifying them would be an observable
   behavior break.
-- **Terminal events.** A scan failure emits exactly one `ScanEventDto::Error` and
-  then resolves to `Err`. A send resolves to the recorded, `Pending`
+- **Terminal events.** A scan failure emits exactly one `Error` event and then
+  resolves to `Err`. A send resolves to the recorded, `Pending`
   `DisplayedTransactionDto` (not necessarily accepted by the node yet; the scan's
   monitor rebroadcasts it, so callers must not resend) or an `Err` for a failure
   before the send was recorded.
