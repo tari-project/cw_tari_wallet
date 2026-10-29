@@ -119,7 +119,8 @@ task. Each controller carries a monotonic `id`.
   takes it. Every cancel bumps a stop generation (`STOP_GENERATION`, even when the
   slot is empty); a starting scan that sees it change while it waited returns `Ok`
   without installing, so a `stop_scan` or teardown during maintenance also stops a
-  scan that was still queued.
+  scan that was still queued. The bump happens under the slot's read lock and the
+  check under its write lock at install, so a stop cannot fall between them.
 - As with the DB, the `std::sync::RwLock` guard is never held across `.await`.
 
 ### Network selection (`src/api/network.rs`)

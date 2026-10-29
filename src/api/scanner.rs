@@ -98,11 +98,13 @@ pub(crate) fn cancel_active_scan() -> Result<()> {
 /// The controller stays in the slot until the scan's own task removes it on exit, so
 /// every later `stop_scan` and every superseding scan can still wait for it.
 fn cancel_current_scan() -> Result<Option<CancellationToken>> {
-    // Also stops a scan still waiting to install itself (see `STOP_GENERATION`).
-    STOP_GENERATION.fetch_add(1, Ordering::SeqCst);
     let guard = SCAN_STATE
         .read()
         .map_err(|_| WalletError::internal("Failed to acquire lock"))?;
+    // Also stops a scan still waiting to install itself (see `STOP_GENERATION`).
+    // Bumped under the slot lock, so it cannot slip between a starting scan's check
+    // and its install.
+    STOP_GENERATION.fetch_add(1, Ordering::SeqCst);
     let Some(controller) = guard.as_ref() else {
         return Ok(None);
     };
@@ -124,11 +126,34 @@ fn take_scan_controller() -> Result<Option<ScanController>> {
 
 /// Install `controller` as the current scan, returning the one it replaced (if
 /// any) so the caller can cancel/await it outside the lock.
+#[cfg(test)]
 fn install_scan_controller(controller: ScanController) -> Result<Option<ScanController>> {
     let mut guard = SCAN_STATE
         .write()
         .map_err(|_| WalletError::internal("Failed to acquire lock"))?;
     Ok(guard.replace(controller))
+}
+
+/// What [`install_unless_stopped`] did.
+enum Install {
+    /// Installed; carries the controller it replaced, if any.
+    Installed(Option<ScanController>),
+    /// A cancel happened since `stop_generation` was read: not installed.
+    Stopped(ScanController),
+}
+
+/// Install `controller` as the current scan unless a cancel bumped
+/// [`STOP_GENERATION`] since the caller read `stop_generation`. The check and the
+/// install happen under the slot's write lock, and a cancel bumps the counter under
+/// its read lock, so a stop can never fall between them.
+fn install_unless_stopped(controller: ScanController, stop_generation: u64) -> Result<Install> {
+    let mut guard = SCAN_STATE
+        .write()
+        .map_err(|_| WalletError::internal("Failed to acquire lock"))?;
+    if STOP_GENERATION.load(Ordering::SeqCst) != stop_generation {
+        return Ok(Install::Stopped(controller));
+    }
+    Ok(Install::Installed(guard.replace(controller)))
 }
 
 /// Clear the slot **only if** it still holds the controller with `id` (i.e. a
@@ -642,17 +667,23 @@ where
     // Wait out a maintenance operation in progress before taking the slot. A stop
     // issued meanwhile found no scan in the slot to cancel: honour it here.
     let maintenance = MAINTENANCE.lock().await;
-    if STOP_GENERATION.load(Ordering::SeqCst) != stop_generation {
-        forwarder.abort();
-        return Ok(());
-    }
-    let previous = install_scan_controller(ScanController {
-        id: scan_id,
-        token: cancel_token.clone(),
-        forwarder,
-        stopped,
-    })?;
+    let install = install_unless_stopped(
+        ScanController {
+            id: scan_id,
+            token: cancel_token.clone(),
+            forwarder,
+            stopped,
+        },
+        stop_generation,
+    )?;
     drop(maintenance);
+    let previous = match install {
+        Install::Installed(previous) => previous,
+        Install::Stopped(controller) => {
+            controller.forwarder.abort();
+            return Ok(());
+        }
+    };
     if let Some(previous) = previous {
         stop_replaced_scan(previous).await;
     }
@@ -1223,6 +1254,30 @@ mod tests {
 
         crate::api::db::disconnect_database().unwrap();
         let _ = std::fs::remove_file(&db_path);
+    }
+
+    /// A controller whose stop generation is stale is not installed; a current one is.
+    #[tokio::test]
+    async fn install_unless_stopped_refuses_a_stale_generation() {
+        let _guard = crate::api::db::GLOBAL_STATE_TEST_LOCK.lock().await;
+        let _ = take_scan_controller().unwrap();
+
+        let generation = STOP_GENERATION.load(Ordering::SeqCst);
+        cancel_active_scan().unwrap();
+        let (stale, _t) = make_controller(60);
+        assert!(matches!(
+            install_unless_stopped(stale, generation).unwrap(),
+            Install::Stopped(_)
+        ));
+        assert!(SCAN_STATE.read().unwrap().is_none(), "not installed");
+
+        let generation = STOP_GENERATION.load(Ordering::SeqCst);
+        let (current, _t) = make_controller(61);
+        assert!(matches!(
+            install_unless_stopped(current, generation).unwrap(),
+            Install::Installed(None)
+        ));
+        assert_eq!(take_scan_controller().unwrap().map(|c| c.id), Some(61));
     }
 
     /// A scan waiting on the maintenance guard when `stop_scan` runs never installs.
