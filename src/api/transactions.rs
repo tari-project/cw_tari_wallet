@@ -143,6 +143,8 @@ pub struct DisplayedTransactionDto {
     pub status: DisplayedTransactionStatus,
     pub amount: u64,
     pub amount_display: String,
+    /// Payer-controlled memo text, passed through unaltered (it can double as a
+    /// payment ID). Render it as plain, bidi-isolated text.
     pub message: Option<String>,
     pub counterparty: Option<CounterpartyInfoDto>,
     pub blockchain: BlockchainInfoDto,
