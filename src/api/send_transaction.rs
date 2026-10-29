@@ -8,6 +8,7 @@ use crate::api::network::{apply_network, parse_network, TariNetwork};
 use crate::api::scanner::stop_scan;
 use crate::api::transactions::DisplayedTransactionDto;
 use crate::domain::keys::key_manager_from_seed_words;
+use crate::domain::text::strip_format_chars;
 use crate::domain::validation::{validate_recipient, validate_recipient_count};
 use crate::frb_generated::StreamSink;
 use anyhow::Result;
@@ -169,39 +170,6 @@ impl From<FinalizedSend> for SendResultDto {
             node_reason: sent.node_reason.map(|r| strip_format_chars(&r)),
         }
     }
-}
-
-/// Remove Unicode format characters (category Cf: bidi overrides, zero-width
-/// characters, BOM, …) that could disguise node-supplied text shown to the user.
-fn strip_format_chars(text: &str) -> String {
-    text.chars()
-        .filter(|c| {
-            !matches!(
-                *c as u32,
-                0x00AD
-                    | 0x0600..=0x0605
-                    | 0x061C
-                    | 0x06DD
-                    | 0x070F
-                    | 0x0890..=0x0891
-                    | 0x08E2
-                    | 0x180E
-                    | 0x200B..=0x200F
-                    | 0x202A..=0x202E
-                    | 0x2060..=0x2064
-                    | 0x2066..=0x206F
-                    | 0xFEFF
-                    | 0xFFF9..=0xFFFB
-                    | 0x110BD
-                    | 0x110CD
-                    | 0x13430..=0x1343F
-                    | 0x1BCA0..=0x1BCA3
-                    | 0x1D173..=0x1D17A
-                    | 0xE0001
-                    | 0xE0020..=0xE007F
-            )
-        })
-        .collect()
 }
 
 /// The Dart-visible reason an `abandon_send` of a send that has not stalled is refused.
@@ -427,7 +395,7 @@ where
         Ok(sent) => sent,
         Err(e) => {
             release_send_reservation(&pending_transaction_id);
-            return Err(WalletError::network(e.to_string()).into());
+            return Err(WalletError::network(strip_format_chars(&e.to_string())).into());
         }
     };
     // The send is recorded either way; a send the node has not accepted is
@@ -1117,16 +1085,6 @@ mod tests {
         .unwrap();
         crate::api::db::release_expired_reservations(&conn);
         assert_eq!(output_status(&conn, output_id), "UNSPENT");
-    }
-
-    #[test]
-    fn node_reason_loses_format_characters() {
-        let reason = "Rejected\u{202E}gnp.exe\u{200B} by\u{FEFF} node\u{2066}x\u{2069}\u{00AD}";
-        assert_eq!(strip_format_chars(reason), "Rejectedgnp.exe by nodex");
-        assert_eq!(
-            strip_format_chars("plain ascii, ünïcode ok"),
-            "plain ascii, ünïcode ok"
-        );
     }
 
     #[test]

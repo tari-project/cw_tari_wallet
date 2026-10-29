@@ -5,6 +5,7 @@
 
 use crate::api::error::WalletError;
 use crate::api::network::{parse_network, TariNetwork};
+use crate::domain::text::strip_format_chars;
 use anyhow::Result;
 use flutter_rust_bridge::frb;
 use minotari_wallet::utils::height;
@@ -12,11 +13,13 @@ use minotari_wallet::utils::height;
 /// Ask the base node at `base_url` for the height of the block mined at `epoch_secs`
 /// (seconds since the Unix epoch) on `network` (`None` → MainNet).
 ///
-/// The answer is checked against [`estimate_height_at_time`], which runs high: a
-/// height more than 10% plus a day of blocks above it is refused, so a hostile node
-/// cannot push a restore or rescan start past the wallet's funds. Async; performs
-/// network I/O. Errors as `Network Error: …` if the URL is invalid, the node cannot
-/// answer, or its answer is implausible.
+/// The answer is checked against [`estimate_height_at_time`]: a height more than two
+/// days of blocks above it is refused. The estimate itself runs high (real blocks
+/// are slightly slower than the target; about 17 days of blocks high by September
+/// 2026, growing over time), so a hostile node can still push a restore or rescan
+/// start that far plus two days late, but no further. Async; performs network I/O.
+/// Errors as `Network Error: …` if the URL is invalid, the node cannot answer, or its
+/// answer is implausible.
 #[frb]
 pub async fn get_height_at_time(
     base_url: String,
@@ -25,7 +28,7 @@ pub async fn get_height_at_time(
 ) -> Result<u64> {
     let node_height = height::height_at_time(&base_url, epoch_secs)
         .await
-        .map_err(|e| WalletError::network(e.to_string()))?;
+        .map_err(|e| WalletError::network(strip_format_chars(&e.to_string())))?;
     let estimate = height::estimate_height_at_time(parse_network(network), epoch_secs);
     let max_plausible = max_plausible_height(estimate);
     if node_height > max_plausible {
@@ -37,13 +40,12 @@ pub async fn get_height_at_time(
     Ok(node_height)
 }
 
-/// The highest node answer accepted for an offline `estimate`: 10% above it, plus a
-/// day of blocks for times close to genesis.
+/// The highest node answer accepted for an offline `estimate`: two days of blocks
+/// above it. Early mainnet blocks ran slightly faster than the target (54 blocks
+/// ahead of the estimate on 2025-07-01); upstream bounds that at about a day.
 fn max_plausible_height(estimate: u64) -> u64 {
-    const DAY_OF_BLOCKS: u64 = 24 * 60 * 60 / height::TARGET_BLOCK_TIME_SECS;
-    estimate
-        .saturating_add(estimate / 10)
-        .saturating_add(DAY_OF_BLOCKS)
+    const MARGIN_BLOCKS: u64 = 2 * 24 * 60 * 60 / height::TARGET_BLOCK_TIME_SECS;
+    estimate.saturating_add(MARGIN_BLOCKS)
 }
 
 /// Estimate, without a node, the height of the block mined at `epoch_secs` on
@@ -105,10 +107,23 @@ mod tests {
     }
 
     #[test]
-    fn plausible_height_allows_ten_percent_and_a_day() {
-        assert_eq!(max_plausible_height(0), 720);
-        assert_eq!(max_plausible_height(100_000), 110_720);
+    fn plausible_height_allows_two_days() {
+        assert_eq!(max_plausible_height(0), 1_440);
+        assert_eq!(max_plausible_height(100_000), 101_440);
         assert_eq!(max_plausible_height(u64::MAX), u64::MAX);
+    }
+
+    /// Real mainnet heights (from minotari's own tests) all pass the check.
+    #[test]
+    fn real_mainnet_heights_are_plausible() {
+        for (time, node_height) in [
+            (1_751_328_000u64, 40_194u64),
+            (1_767_225_600, 170_622),
+            (1_788_220_800, 335_339),
+        ] {
+            let estimate = estimate_height_at_time(Some(TariNetwork::MainNet), time);
+            assert!(node_height <= max_plausible_height(estimate), "{time}");
+        }
     }
 
     #[tokio::test]

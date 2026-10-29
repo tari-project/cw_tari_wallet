@@ -123,13 +123,13 @@ async fn get_height_at_time_returns_the_node_height() {
 
 #[tokio::test]
 async fn get_height_at_time_refuses_an_implausible_height() {
-    let server = node_answering_height(500_000).await;
+    let server = node_answering_height(175_000).await;
     let err = get_height_at_time(server.uri(), JAN_2026, Some(TariNetwork::MainNet))
         .await
-        .expect_err("a height far above the estimate must be refused");
+        .expect_err("a height more than two days above the estimate must be refused");
     assert!(
         err.to_string()
-            .starts_with("Network Error: Node reported an implausible height 500000"),
+            .starts_with("Network Error: Node reported an implausible height 175000"),
         "got {err}"
     );
 }

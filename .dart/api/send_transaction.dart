@@ -8,7 +8,7 @@ import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'transactions.dart';
 
-// These functions are ignored because they are not marked as `pub`: `build_unsigned_transaction`, `confirm_own_payload`, `create_transaction_sender`, `map_signing_error`, `release_send_reservation`, `send_with_handler`, `stored_key_manager`, `strip_format_chars`, `validate_inputs`, `verify_seed_words_match_account`
+// These functions are ignored because they are not marked as `pub`: `build_unsigned_transaction`, `confirm_own_payload`, `create_transaction_sender`, `map_signing_error`, `release_send_reservation`, `send_with_handler`, `stored_key_manager`, `validate_inputs`, `verify_seed_words_match_account`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ValidatedInputs`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `from`, `from`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `send_transaction_multi_with_handler`, `send_transaction_with_handler`

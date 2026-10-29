@@ -1,5 +1,6 @@
 use crate::api::error::WalletError;
 use crate::api::transactions::DisplayedTransactionDto;
+use crate::domain::text::strip_format_chars;
 use crate::{
     api::db::{get_db_connection, get_db_path, release_expired_reservations},
     frb_generated::StreamSink,
@@ -686,12 +687,15 @@ where
 
     // State is cleared *above*, before this fallible terminal-event callback, so the
     // scan slot is guaranteed empty even if `event_callback` itself fails here.
-    if let Err(e) = &result {
+    if let Err(e) = result {
         // Terminal `Error` event for the stream (preserved exactly: scan failure
-        // still emits one `ScanEventDto::Error` then returns `Err`).
-        let _ = event_callback(ScanEventV2Dto::Error(e.to_string()));
+        // still emits one `ScanEventDto::Error` then returns `Err`). The text can
+        // carry node-supplied words, so invisible characters are dropped.
+        let message = strip_format_chars(&e.to_string());
+        let _ = event_callback(ScanEventV2Dto::Error(message.clone()));
+        return Err(anyhow!(message));
     }
-    result
+    Ok(())
 }
 
 /// Stop a scan this one replaced: cancel it and wait until its task has returned,
