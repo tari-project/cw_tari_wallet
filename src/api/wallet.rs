@@ -1,6 +1,7 @@
 use crate::api::db::{get_db_connection, get_db_path};
 use crate::api::error::WalletError;
 use crate::api::network::{apply_network, parse_network, TariNetwork};
+use crate::api::scanner::stop_scan;
 use crate::domain::address::{construct_wallet_address_details, split_hidden_words};
 use crate::domain::keys::key_manager_from_cipher_seed;
 use anyhow::{Context, Result};
@@ -207,17 +208,19 @@ pub fn import_wallet_from_keys(
 /// Re-encrypt wallet `wallet_name` under `new_passphrase`.
 ///
 /// `old_passphrase` and `new_passphrase` are **secret**. A wrong `old_passphrase`
-/// errors as `Invalid Passphrase` and changes nothing. Stop any running scan first
-/// and restart it with the new passphrase. Requires [`initialize_database`] first.
-/// Synchronous.
+/// errors as `Invalid Passphrase` and changes nothing. Any running scan is stopped
+/// (and waited for) first, so it neither reads the old passphrase's keys nor holds
+/// the database while it is rewritten; start it again with the new passphrase.
+/// Requires [`initialize_database`] first.
 #[frb]
-pub fn change_passphrase(
+pub async fn change_passphrase(
     wallet_name: String,
     old_passphrase: String,
     new_passphrase: String,
 ) -> Result<()> {
     let old_passphrase = Zeroizing::new(old_passphrase);
     let new_passphrase = Zeroizing::new(new_passphrase);
+    stop_scan().await?;
     let mut conn = get_db_connection()?;
 
     minotari_wallet::db::change_passphrase(

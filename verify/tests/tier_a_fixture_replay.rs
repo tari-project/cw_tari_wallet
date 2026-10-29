@@ -14,6 +14,9 @@
 //! MUST run sequentially — they are serialized via [`SERIAL`] and each one tears
 //! the DB down (`disconnect_database`) on exit so the slot is left clean.
 
+// Spawning a scan needs its (deep) minotari future proven `Send`; see `src/lib.rs`.
+#![recursion_limit = "256"]
+
 use std::sync::Mutex;
 
 use rust_lib_flutter_rust_wallet::api::address::get_address;
@@ -371,22 +374,51 @@ fn change_passphrase_reencrypts_the_wallet() {
         )
     };
     let before = address_with("").expect("old passphrase opens the wallet");
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
 
-    let err = change_passphrase(
-        fixture::WALLET_NAME.to_string(),
-        "wrong".to_string(),
-        "new".to_string(),
-    )
-    .expect_err("a wrong old passphrase must be refused");
+    let err = runtime
+        .block_on(change_passphrase(
+            fixture::WALLET_NAME.to_string(),
+            "wrong".to_string(),
+            "new".to_string(),
+        ))
+        .expect_err("a wrong old passphrase must be refused");
     assert_eq!(err.to_string(), "Invalid Passphrase");
     address_with("").expect("a refused change leaves the old passphrase working");
 
-    change_passphrase(
-        fixture::WALLET_NAME.to_string(),
-        String::new(),
-        "new".to_string(),
-    )
-    .expect("change_passphrase");
+    // A continuous scan is running; changing the passphrase stops it first.
+    runtime.block_on(async {
+        let server = mock_chain_node().await;
+        let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel();
+        let config = ScanConfiguration {
+            continuous: true,
+            ..rescan_config("", server.uri())
+        };
+        let scan = tokio::spawn(start_scan_v2_with_handler(config, move |_| {
+            let _ = seen_tx.send(());
+            Ok(())
+        }));
+        seen_rx.recv().await.expect("the scan is running");
+
+        change_passphrase(
+            fixture::WALLET_NAME.to_string(),
+            String::new(),
+            "new".to_string(),
+        )
+        .await
+        .expect("change_passphrase");
+        // The scan had returned (and dropped its event callback) before the change.
+        loop {
+            match seen_rx.try_recv() {
+                Ok(()) => continue,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    panic!("the scan was still running after change_passphrase")
+                }
+            }
+        }
+        scan.await.unwrap().expect("a stopped scan returns Ok");
+    });
     assert_eq!(address_with("new").expect("new passphrase"), before);
     assert!(
         address_with("").is_err(),

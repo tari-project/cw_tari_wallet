@@ -258,7 +258,7 @@ fn wire__crate__api__wallet__change_passphrase_impl(
     rust_vec_len_: i32,
     data_len_: i32,
 ) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
             debug_name: "change_passphrase",
             port: Some(port_),
@@ -278,16 +278,18 @@ fn wire__crate__api__wallet__change_passphrase_impl(
             let api_old_passphrase = <String>::sse_decode(&mut deserializer);
             let api_new_passphrase = <String>::sse_decode(&mut deserializer);
             deserializer.end();
-            move |context| {
+            move |context| async move {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
-                    (move || {
+                    (move || async move {
                         let output_ok = crate::api::wallet::change_passphrase(
                             api_wallet_name,
                             api_old_passphrase,
                             api_new_passphrase,
-                        )?;
+                        )
+                        .await?;
                         Ok(output_ok)
-                    })(),
+                    })()
+                    .await,
                 )
             }
         },
