@@ -110,8 +110,7 @@ abstract class RustLibApi extends BaseApi {
   int crateApiHeightBirthdayFromHeight(
       {TariNetwork? network, required BigInt height});
 
-  Stream<SendTransactionEvent> crateApiBurnBurnToL2(
-      {required BurnToL2Details details});
+  Stream<BurnEvent> crateApiBurnBurnToL2({required BurnToL2Details details});
 
   Future<void> crateApiWalletChangePassphrase(
       {required String walletName,
@@ -407,19 +406,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Stream<SendTransactionEvent> crateApiBurnBurnToL2(
-      {required BurnToL2Details details}) {
-    final sink = RustStreamSink<SendTransactionEvent>();
+  Stream<BurnEvent> crateApiBurnBurnToL2({required BurnToL2Details details}) {
+    final sink = RustStreamSink<BurnEvent>();
     unawaited(handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_StreamSink_send_transaction_event_Sse(sink, serializer);
+        sse_encode_StreamSink_burn_event_Sse(sink, serializer);
         sse_encode_box_autoadd_burn_to_l_2_details(details, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 6, port: port_);
       },
       codec: SseCodec(
-        decodeSuccessData: sse_decode_burn_transaction_dto,
+        decodeSuccessData: sse_decode_unit,
         decodeErrorData: sse_decode_AnyhowException,
       ),
       constMeta: kCrateApiBurnBurnToL2ConstMeta,
@@ -1599,6 +1597,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RustStreamSink<BurnEvent> dco_decode_StreamSink_burn_event_Sse(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
+  }
+
+  @protected
   RustStreamSink<ScanEventDto> dco_decode_StreamSink_scan_event_dto_Sse(
       dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -1674,6 +1678,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BurnTransactionDto dco_decode_box_autoadd_burn_transaction_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_burn_transaction_dto(raw);
+  }
+
+  @protected
   CounterpartyInfoDto dco_decode_box_autoadd_counterparty_info_dto(
       dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -1725,6 +1735,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SendTransactionEvent dco_decode_box_autoadd_send_transaction_event(
+      dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_send_transaction_event(raw);
+  }
+
+  @protected
   TariNetwork dco_decode_box_autoadd_tari_network(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_tari_network(raw);
@@ -1754,6 +1771,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   BigInt dco_decode_box_autoadd_u_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_u_64(raw);
+  }
+
+  @protected
+  BurnEvent dco_decode_burn_event(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    switch (raw[0]) {
+      case 0:
+        return BurnEvent_Stage(
+          dco_decode_box_autoadd_send_transaction_event(raw[1]),
+        );
+      case 1:
+        return BurnEvent_Recorded(
+          dco_decode_box_autoadd_burn_transaction_dto(raw[1]),
+        );
+      default:
+        throw Exception("unreachable");
+    }
   }
 
   @protected
@@ -2444,6 +2478,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RustStreamSink<BurnEvent> sse_decode_StreamSink_burn_event_Sse(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
+  }
+
+  @protected
   RustStreamSink<ScanEventDto> sse_decode_StreamSink_scan_event_dto_Sse(
       SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -2523,6 +2564,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BurnTransactionDto sse_decode_box_autoadd_burn_transaction_dto(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_burn_transaction_dto(deserializer));
+  }
+
+  @protected
   CounterpartyInfoDto sse_decode_box_autoadd_counterparty_info_dto(
       SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -2579,6 +2627,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SendTransactionEvent sse_decode_box_autoadd_send_transaction_event(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_send_transaction_event(deserializer));
+  }
+
+  @protected
   TariNetwork sse_decode_box_autoadd_tari_network(
       SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -2609,6 +2664,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_u_64(deserializer));
+  }
+
+  @protected
+  BurnEvent sse_decode_burn_event(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        var var_field0 =
+            sse_decode_box_autoadd_send_transaction_event(deserializer);
+        return BurnEvent_Stage(var_field0);
+      case 1:
+        var var_field0 =
+            sse_decode_box_autoadd_burn_transaction_dto(deserializer);
+        return BurnEvent_Recorded(var_field0);
+      default:
+        throw UnimplementedError('');
+    }
   }
 
   @protected
@@ -3427,6 +3501,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_StreamSink_burn_event_Sse(
+      RustStreamSink<BurnEvent> self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+        self.setupAndSerialize(
+            codec: SseCodec(
+          decodeSuccessData: sse_decode_burn_event,
+          decodeErrorData: sse_decode_AnyhowException,
+        )),
+        serializer);
+  }
+
+  @protected
   void sse_encode_StreamSink_scan_event_dto_Sse(
       RustStreamSink<ScanEventDto> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -3513,6 +3600,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_burn_transaction_dto(
+      BurnTransactionDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_burn_transaction_dto(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_counterparty_info_dto(
       CounterpartyInfoDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -3569,6 +3663,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_send_transaction_event(
+      SendTransactionEvent self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_send_transaction_event(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_tari_network(
       TariNetwork self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -3599,6 +3700,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_u_64(self, serializer);
+  }
+
+  @protected
+  void sse_encode_burn_event(BurnEvent self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    switch (self) {
+      case BurnEvent_Stage(field0: final field0):
+        sse_encode_i_32(0, serializer);
+        sse_encode_box_autoadd_send_transaction_event(field0, serializer);
+      case BurnEvent_Recorded(field0: final field0):
+        sse_encode_i_32(1, serializer);
+        sse_encode_box_autoadd_burn_transaction_dto(field0, serializer);
+    }
   }
 
   @protected

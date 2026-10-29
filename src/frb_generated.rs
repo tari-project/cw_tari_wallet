@@ -275,7 +275,7 @@ fn wire__crate__api__burn__burn_to_l2_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_sink = <StreamSink<
-                crate::api::send_transaction::SendTransactionEvent,
+                crate::api::burn::BurnEvent,
                 flutter_rust_bridge::for_generated::SseCodec,
             >>::sse_decode(&mut deserializer);
             let api_details = <crate::api::burn::BurnToL2Details>::sse_decode(&mut deserializer);
@@ -1884,6 +1884,16 @@ impl SseDecode
 }
 
 impl SseDecode
+    for StreamSink<crate::api::burn::BurnEvent, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <String>::sse_decode(deserializer);
+        return StreamSink::deserialize(inner);
+    }
+}
+
+impl SseDecode
     for StreamSink<crate::api::scanner::ScanEventDto, flutter_rust_bridge::for_generated::SseCodec>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -1961,6 +1971,28 @@ impl SseDecode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         deserializer.cursor.read_u8().unwrap() != 0
+    }
+}
+
+impl SseDecode for crate::api::burn::BurnEvent {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut tag_ = <i32>::sse_decode(deserializer);
+        match tag_ {
+            0 => {
+                let mut var_field0 =
+                    <crate::api::send_transaction::SendTransactionEvent>::sse_decode(deserializer);
+                return crate::api::burn::BurnEvent::Stage(var_field0);
+            }
+            1 => {
+                let mut var_field0 =
+                    <crate::api::burn::BurnTransactionDto>::sse_decode(deserializer);
+                return crate::api::burn::BurnEvent::Recorded(var_field0);
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
     }
 }
 
@@ -3072,6 +3104,30 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::transactions::BlockchainInfoD
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::burn::BurnEvent {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            crate::api::burn::BurnEvent::Stage(field0) => {
+                [0.into_dart(), field0.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::burn::BurnEvent::Recorded(field0) => {
+                [1.into_dart(), field0.into_into_dart().into_dart()].into_dart()
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::burn::BurnEvent {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::burn::BurnEvent>
+    for crate::api::burn::BurnEvent
+{
+    fn into_into_dart(self) -> crate::api::burn::BurnEvent {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::burn::BurnProofDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -3998,6 +4054,15 @@ impl SseEncode
 }
 
 impl SseEncode
+    for StreamSink<crate::api::burn::BurnEvent, flutter_rust_bridge::for_generated::SseCodec>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        unimplemented!("")
+    }
+}
+
+impl SseEncode
     for StreamSink<crate::api::scanner::ScanEventDto, flutter_rust_bridge::for_generated::SseCodec>
 {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -4060,6 +4125,27 @@ impl SseEncode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         serializer.cursor.write_u8(self as _).unwrap();
+    }
+}
+
+impl SseEncode for crate::api::burn::BurnEvent {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        match self {
+            crate::api::burn::BurnEvent::Stage(field0) => {
+                <i32>::sse_encode(0, serializer);
+                <crate::api::send_transaction::SendTransactionEvent>::sse_encode(
+                    field0, serializer,
+                );
+            }
+            crate::api::burn::BurnEvent::Recorded(field0) => {
+                <i32>::sse_encode(1, serializer);
+                <crate::api::burn::BurnTransactionDto>::sse_encode(field0, serializer);
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
     }
 }
 

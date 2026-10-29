@@ -6,26 +6,15 @@
 import '../frb_generated.dart';
 import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
+import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 import 'send_transaction.dart';
+part 'burn.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `base_node_client`, `burn_proofs_dir`, `burn_proofs_for_account`, `refresh_proof`, `release_burn_reservation`, `write_atomically`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `burn_to_l2_with_handler`
 
-/// Burn `amount` µT to an Ootle (L2) account, streaming progress.
-///
-/// Streams [`SendTransactionEvent`]s (`Initializing`, `ValidatingInput`,
-/// `ConnectingToNetwork`, `ConstructingTransaction`, `Broadcasting`, `Completed`) over
-/// `sink` and resolves to the recorded [`BurnTransactionDto`]. Requires
-/// [`initialize_database`](crate::api::db::initialize_database) first.
-///
-/// **A burn is irreversible.** `Ok` means it is recorded, not necessarily accepted by
-/// the node; the scan's transaction monitor rebroadcasts it (only while `start_scan`
-/// runs), so **never burn again after `Ok`**. An `Err` means nothing was broadcast.
-/// Like `send_transaction`, the burn continues if the Dart stream is closed.
-///
-/// Fetch the claim proof later with [`get_burn_proofs`].
-Stream<SendTransactionEvent> burnToL2({required BurnToL2Details details}) =>
+Stream<BurnEvent> burnToL2({required BurnToL2Details details}) =>
     RustLib.instance.api.crateApiBurnBurnToL2(details: details);
 
 /// List `wallet_name`'s burns with their claim proofs, producing any proof now ready.
@@ -43,6 +32,18 @@ Future<List<BurnProofDto>> getBurnProofs(
         {required String walletName, TariNetwork? network, String? baseUrl}) =>
     RustLib.instance.api.crateApiBurnGetBurnProofs(
         walletName: walletName, network: network, baseUrl: baseUrl);
+
+@freezed
+sealed class BurnEvent with _$BurnEvent {
+  const BurnEvent._();
+
+  const factory BurnEvent.stage(
+    SendTransactionEvent field0,
+  ) = BurnEvent_Stage;
+  const factory BurnEvent.recorded(
+    BurnTransactionDto field0,
+  ) = BurnEvent_Recorded;
+}
 
 /// One burn's claim proof, from [`get_burn_proofs`].
 ///

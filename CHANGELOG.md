@@ -113,8 +113,9 @@ All new; no existing function, type, field, variant or error string changed.
 ### Added (burn to Tari Ootle L2)
 
 - Burn to Tari Ootle (L2), additive (MINOR). `burn_to_l2(sink, BurnToL2Details)`
-  burns µT to an Ootle account public key, streaming the existing
-  `SendTransactionEvent`s, and resolves to a recorded `BurnTransactionDto`. The claim
+  burns µT to an Ootle account public key and streams `BurnEvent`:
+  `Stage(SendTransactionEvent)` for progress, then `Recorded(BurnTransactionDto)`
+  once the burn is stored (FRB drops a streaming function's return value). The claim
   key must be 64 hex characters that decode to a non-identity Ristretto point;
   anything else is rejected with `Invalid Recipient Address: Invalid claim public
   key: …` before any UTXO is reserved. No sidechain key is ever set.

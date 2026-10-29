@@ -233,15 +233,24 @@ where
 ///
 /// Fetch the claim proof later with [`get_burn_proofs`].
 #[frb]
-pub async fn burn_to_l2(
-    sink: StreamSink<SendTransactionEvent>,
-    details: BurnToL2Details,
-) -> Result<BurnTransactionDto> {
-    burn_to_l2_with_handler(details, move |event| {
+/// An event of [`burn_to_l2`]'s stream: progress stages, then `Recorded` with the burn once it is
+/// stored. flutter_rust_bridge drops a streaming function's return value, so the result travels
+/// on the stream.
+pub enum BurnEvent {
+    Stage(SendTransactionEvent),
+    Recorded(BurnTransactionDto),
+}
+
+pub async fn burn_to_l2(sink: StreamSink<BurnEvent>, details: BurnToL2Details) -> Result<()> {
+    let sink = std::sync::Arc::new(sink);
+    let stages = sink.clone();
+    let burn = burn_to_l2_with_handler(details, move |event| {
         // Ignore sink-closed: a half-broadcast burn must still finish.
-        let _ = sink.add(event);
+        let _ = stages.add(BurnEvent::Stage(event));
     })
-    .await
+    .await?;
+    let _ = sink.add(BurnEvent::Recorded(burn));
+    Ok(())
 }
 
 /// List `wallet_name`'s burns with their claim proofs, producing any proof now ready.

@@ -61,6 +61,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           dynamic raw);
 
   @protected
+  RustStreamSink<BurnEvent> dco_decode_StreamSink_burn_event_Sse(dynamic raw);
+
+  @protected
   RustStreamSink<ScanEventDto> dco_decode_StreamSink_scan_event_dto_Sse(
       dynamic raw);
 
@@ -93,6 +96,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BurnToL2Details dco_decode_box_autoadd_burn_to_l_2_details(dynamic raw);
 
   @protected
+  BurnTransactionDto dco_decode_box_autoadd_burn_transaction_dto(dynamic raw);
+
+  @protected
   CounterpartyInfoDto dco_decode_box_autoadd_counterparty_info_dto(dynamic raw);
 
   @protected
@@ -119,6 +125,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       dynamic raw);
 
   @protected
+  SendTransactionEvent dco_decode_box_autoadd_send_transaction_event(
+      dynamic raw);
+
+  @protected
   TariNetwork dco_decode_box_autoadd_tari_network(dynamic raw);
 
   @protected
@@ -134,6 +144,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt dco_decode_box_autoadd_u_64(dynamic raw);
+
+  @protected
+  BurnEvent dco_decode_burn_event(dynamic raw);
 
   @protected
   BurnProofDto dco_decode_burn_proof_dto(dynamic raw);
@@ -329,6 +342,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           SseDeserializer deserializer);
 
   @protected
+  RustStreamSink<BurnEvent> sse_decode_StreamSink_burn_event_Sse(
+      SseDeserializer deserializer);
+
+  @protected
   RustStreamSink<ScanEventDto> sse_decode_StreamSink_scan_event_dto_Sse(
       SseDeserializer deserializer);
 
@@ -365,6 +382,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  BurnTransactionDto sse_decode_box_autoadd_burn_transaction_dto(
+      SseDeserializer deserializer);
+
+  @protected
   CounterpartyInfoDto sse_decode_box_autoadd_counterparty_info_dto(
       SseDeserializer deserializer);
 
@@ -397,6 +418,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  SendTransactionEvent sse_decode_box_autoadd_send_transaction_event(
+      SseDeserializer deserializer);
+
+  @protected
   TariNetwork sse_decode_box_autoadd_tari_network(SseDeserializer deserializer);
 
   @protected
@@ -412,6 +437,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer);
+
+  @protected
+  BurnEvent sse_decode_burn_event(SseDeserializer deserializer);
 
   @protected
   BurnProofDto sse_decode_burn_proof_dto(SseDeserializer deserializer);
@@ -623,6 +651,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           SensitiveSeeds self, SseSerializer serializer);
 
   @protected
+  void sse_encode_StreamSink_burn_event_Sse(
+      RustStreamSink<BurnEvent> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_StreamSink_scan_event_dto_Sse(
       RustStreamSink<ScanEventDto> self, SseSerializer serializer);
 
@@ -658,6 +690,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       BurnToL2Details self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_burn_transaction_dto(
+      BurnTransactionDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_counterparty_info_dto(
       CounterpartyInfoDto self, SseSerializer serializer);
 
@@ -690,6 +726,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SendTransactionDetails self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_send_transaction_event(
+      SendTransactionEvent self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_tari_network(
       TariNetwork self, SseSerializer serializer);
 
@@ -706,6 +746,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_burn_event(BurnEvent self, SseSerializer serializer);
 
   @protected
   void sse_encode_burn_proof_dto(BurnProofDto self, SseSerializer serializer);
