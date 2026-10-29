@@ -29,7 +29,7 @@ use rust_lib_flutter_rust_wallet::api::scanner::{
     ScanEventDto, ScanEventV2Dto, ScanStatusDto,
 };
 use rust_lib_flutter_rust_wallet::api::send_transaction::{
-    send_transaction_multi_with_handler, send_transaction_with_handler,
+    abandon_send, send_transaction_multi_with_handler, send_transaction_with_handler,
     MultiSendTransactionDetails, SendRecipient, SendTransactionDetails, TransactionStage,
 };
 use rust_lib_flutter_rust_wallet::api::signing::{sign_message_with_wallet, verify_message};
@@ -921,6 +921,74 @@ fn key_imported_wallet_sends_with_its_stored_keys() {
         .expect("a key-imported wallet sends with its stored keys");
     assert!(!sent.transaction.id.is_empty());
     assert!(get_balance("keyed".to_string()).unwrap().locked > 0);
+}
+
+/// A send the node never accepted can be abandoned, releasing its inputs.
+#[test]
+fn abandon_send_releases_a_send_the_node_never_accepted() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let sent = runtime
+        .block_on(async {
+            let server = wiremock::MockServer::start().await;
+            let details = funded_send(
+                &funded,
+                vec![SendRecipient {
+                    address: funded.recipient.clone(),
+                    amount: 100_000,
+                    payment_id: None,
+                }],
+                false,
+                server.uri(),
+            );
+            send_transaction_multi_with_handler(details, |_| {}).await
+        })
+        .expect("send");
+    assert!(!sent.accepted_by_node);
+    assert!(get_balance(FUNDED.to_string()).unwrap().locked > 0);
+    assert_eq!(
+        spendable_outputs(&funded),
+        Some(FUNDED_VALUES.len() - 1),
+        "the send holds one input"
+    );
+    let tx_id = sent.transaction.id;
+
+    let abandon = |passphrase: &str, id: &str, force: bool| {
+        abandon_send(
+            FUNDED.to_string(),
+            passphrase.to_string(),
+            id.to_string(),
+            force,
+        )
+    };
+    assert_eq!(
+        abandon("wrong", &tx_id, true).unwrap_err().to_string(),
+        "Invalid Passphrase"
+    );
+    assert_eq!(
+        abandon(FUNDED_PASSPHRASE, "999", true)
+            .unwrap_err()
+            .to_string(),
+        "Wallet Error: No send 999 in this account"
+    );
+    // Refused once, not yet stalled: needs force.
+    let not_stalled = abandon(FUNDED_PASSPHRASE, &tx_id, false).unwrap_err();
+    assert!(
+        not_stalled.to_string().starts_with("Wallet Error: ")
+            && not_stalled.to_string().contains("is not stalled"),
+        "got {not_stalled}"
+    );
+
+    let note = abandon(FUNDED_PASSPHRASE, &tx_id, true).expect("abandon_send");
+    assert!(note.contains("inputs are released"), "got {note}");
+    assert_eq!(get_balance(FUNDED.to_string()).unwrap().locked, 0);
+    assert_eq!(
+        spendable_outputs(&funded),
+        Some(FUNDED_VALUES.len()),
+        "every input is spendable again"
+    );
 }
 
 /// A view-only wallet sending with its stored keys is refused before anything is

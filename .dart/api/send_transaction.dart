@@ -8,10 +8,34 @@ import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'transactions.dart';
 
-// These functions are ignored because they are not marked as `pub`: `build_unsigned_transaction`, `confirm_own_payload`, `create_transaction_sender`, `map_signing_error`, `release_send_reservation`, `send_with_handler`, `stored_key_manager`, `validate_inputs`, `verify_seed_words_match_account`
+// These functions are ignored because they are not marked as `pub`: `build_unsigned_transaction`, `confirm_own_payload`, `create_transaction_sender`, `map_signing_error`, `release_send_reservation`, `send_with_handler`, `stored_key_manager`, `strip_format_chars`, `validate_inputs`, `verify_seed_words_match_account`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ValidatedInputs`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `from`, `from`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `send_transaction_multi_with_handler`, `send_transaction_with_handler`
+
+/// Give up a send the node has not accepted, and release its inputs.
+///
+/// `transaction_id` is the send's `DisplayedTransactionDto.id`; `passphrase`
+/// (**secret**) must open wallet `wallet_name`. Delegates to minotari: only a send
+/// that is not mined yet can be abandoned, and unless `force` is set the node must
+/// have refused it repeatedly (it is stalled). A send without a change output is
+/// always refused. Returns what abandoning does not do: if a node still holds the
+/// transaction it can still be mined, and the wallet then shows it as mined.
+///
+/// Errors: `Invalid Passphrase`, `No accounts found for this wallet`, and
+/// `Wallet Error: …` with minotari's reason (unknown send, already mined, not
+/// stalled, input already spent, change in use or already seen on chain).
+/// Requires [`initialize_database`] first.
+Future<String> abandonSend(
+        {required String walletName,
+        required String passphrase,
+        required String transactionId,
+        required bool force}) =>
+    RustLib.instance.api.crateApiSendTransactionAbandonSend(
+        walletName: walletName,
+        passphrase: passphrase,
+        transactionId: transactionId,
+        force: force);
 
 /// Build, sign, and broadcast a one-sided transaction, streaming progress.
 ///
@@ -24,7 +48,8 @@ import 'transactions.dart';
 /// scan's transaction monitor rebroadcasts it, so **do not resend after `Ok`**.
 /// Rebroadcast only happens while `start_scan` runs.
 /// `Network Error` only comes from failures before the send is recorded.
-/// [`send_transaction_multi`] reports whether the node accepted it.
+/// [`send_transaction_multi`] reports whether the node accepted it; [`abandon_send`]
+/// gives up a send the node keeps refusing and releases its inputs.
 ///
 /// Async and streamed. The send **continues even if the Dart stream is closed**
 /// (a half-broadcast transaction must finish) — this deliberately differs from
@@ -41,7 +66,8 @@ Stream<SendTransactionEvent> sendTransaction(
 /// Streams the same [`SendTransactionEvent`] sequence as [`send_transaction`] and
 /// resolves to a [`SendResultDto`]: the recorded transaction plus whether the node
 /// accepted it. A send the node has not accepted yet still resolves `Ok` and is
-/// rebroadcast by the wallet; never resend it. Each recipient gets its own output
+/// rebroadcast by the wallet; never resend it ([`abandon_send`] gives it up if the
+/// node keeps refusing it). Each recipient gets its own output
 /// carrying its own `payment_id`. Requires [`initialize_database`] first.
 /// Like [`send_transaction`], the send continues if the Dart stream is closed.
 Stream<SendTransactionEvent> sendTransactionMulti(
@@ -141,7 +167,9 @@ class SendRecipient {
 /// it mined). When `false` the send is still recorded and the wallet rebroadcasts it:
 /// **do not send it again**. `note` is the message to show the user in that case (or
 /// when the wallet could not record everything yet); `node_reason` is the node's
-/// answer when it did not accept the send.
+/// answer when it did not accept the send (node-supplied text: display it as plain
+/// text). If the node keeps refusing it, [`abandon_send`] gives the send up and
+/// releases its inputs.
 class SendResultDto {
   final DisplayedTransactionDto transaction;
   final bool acceptedByNode;

@@ -16,6 +16,7 @@ use minotari_wallet::get_accounts;
 use minotari_wallet::transactions::manager::{FinalizedSend, TransactionSender};
 use minotari_wallet::transactions::one_sided_transaction::Recipient;
 use tari_common::configuration::Network;
+use tari_common_types::transaction::TxId;
 use tari_transaction_components::consensus::ConsensusConstantsBuilder;
 use tari_transaction_components::key_manager::wallet_types::WalletType;
 use tari_transaction_components::key_manager::{KeyManager, TransactionKeyManagerInterface};
@@ -143,7 +144,9 @@ pub struct SendTransactionEvent {
 /// it mined). When `false` the send is still recorded and the wallet rebroadcasts it:
 /// **do not send it again**. `note` is the message to show the user in that case (or
 /// when the wallet could not record everything yet); `node_reason` is the node's
-/// answer when it did not accept the send.
+/// answer when it did not accept the send (node-supplied text: display it as plain
+/// text). If the node keeps refusing it, [`abandon_send`] gives the send up and
+/// releases its inputs.
 #[frb]
 #[derive(Debug, Clone)]
 pub struct SendResultDto {
@@ -159,9 +162,89 @@ impl From<FinalizedSend> for SendResultDto {
             transaction: sent.displayed_transaction.into(),
             accepted_by_node: sent.accepted_by_node,
             note: sent.note,
-            node_reason: sent.node_reason,
+            node_reason: sent.node_reason.map(|r| strip_format_chars(&r)),
         }
     }
+}
+
+/// Remove Unicode format characters (category Cf: bidi overrides, zero-width
+/// characters, BOM, …) that could disguise node-supplied text shown to the user.
+fn strip_format_chars(text: &str) -> String {
+    text.chars()
+        .filter(|c| {
+            !matches!(
+                *c as u32,
+                0x00AD
+                    | 0x0600..=0x0605
+                    | 0x061C
+                    | 0x06DD
+                    | 0x070F
+                    | 0x0890..=0x0891
+                    | 0x08E2
+                    | 0x180E
+                    | 0x200B..=0x200F
+                    | 0x202A..=0x202E
+                    | 0x2060..=0x2064
+                    | 0x2066..=0x206F
+                    | 0xFEFF
+                    | 0xFFF9..=0xFFFB
+                    | 0x110BD
+                    | 0x110CD
+                    | 0x13430..=0x1343F
+                    | 0x1BCA0..=0x1BCA3
+                    | 0x1D173..=0x1D17A
+                    | 0xE0001
+                    | 0xE0020..=0xE007F
+            )
+        })
+        .collect()
+}
+
+/// Give up a send the node has not accepted, and release its inputs.
+///
+/// `transaction_id` is the send's `DisplayedTransactionDto.id`; `passphrase`
+/// (**secret**) must open wallet `wallet_name`. Delegates to minotari: only a send
+/// that is not mined yet can be abandoned, and unless `force` is set the node must
+/// have refused it repeatedly (it is stalled). A send without a change output is
+/// always refused. Returns what abandoning does not do: if a node still holds the
+/// transaction it can still be mined, and the wallet then shows it as mined.
+///
+/// Errors: `Invalid Passphrase`, `No accounts found for this wallet`, and
+/// `Wallet Error: …` with minotari's reason (unknown send, already mined, not
+/// stalled, input already spent, change in use or already seen on chain).
+/// Requires [`initialize_database`] first.
+#[frb]
+pub fn abandon_send(
+    wallet_name: String,
+    passphrase: String,
+    transaction_id: String,
+    force: bool,
+) -> Result<String> {
+    let passphrase = Zeroizing::new(passphrase);
+    let tx_id: u64 = transaction_id
+        .parse()
+        .map_err(|_| WalletError::wallet("Invalid transaction id"))?;
+
+    let mut conn = get_db_connection()?;
+    let accounts = get_accounts(&conn, Some(&wallet_name))?;
+    let account = accounts.first().ok_or(WalletError::NoAccounts)?;
+    account
+        .decrypt_wallet_type(&passphrase)
+        .map_err(|e| match e {
+            WalletDbError::DecryptionFailed(_) => WalletError::InvalidPassphrase,
+            other => WalletError::wallet(other.to_string()),
+        })?;
+
+    let abandoned = minotari_wallet::transactions::abandon::abandon_send(
+        &mut conn,
+        account.id,
+        TxId::from(tx_id),
+        force,
+        false,
+        None,
+    )
+    .map_err(|e| WalletError::wallet(e.to_string()))?;
+    Ok(abandoned.note().to_string())
 }
 
 /// Resolves `Ok` even when the node has not accepted the send yet: it is recorded and
@@ -468,7 +551,8 @@ fn map_signing_error(e: TransactionBuilderError) -> WalletError {
 /// scan's transaction monitor rebroadcasts it, so **do not resend after `Ok`**.
 /// Rebroadcast only happens while `start_scan` runs.
 /// `Network Error` only comes from failures before the send is recorded.
-/// [`send_transaction_multi`] reports whether the node accepted it.
+/// [`send_transaction_multi`] reports whether the node accepted it; [`abandon_send`]
+/// gives up a send the node keeps refusing and releases its inputs.
 ///
 /// Async and streamed. The send **continues even if the Dart stream is closed**
 /// (a half-broadcast transaction must finish) — this deliberately differs from
@@ -497,7 +581,8 @@ pub async fn send_transaction(
 /// Streams the same [`SendTransactionEvent`] sequence as [`send_transaction`] and
 /// resolves to a [`SendResultDto`]: the recorded transaction plus whether the node
 /// accepted it. A send the node has not accepted yet still resolves `Ok` and is
-/// rebroadcast by the wallet; never resend it. Each recipient gets its own output
+/// rebroadcast by the wallet; never resend it ([`abandon_send`] gives it up if the
+/// node keeps refusing it). Each recipient gets its own output
 /// carrying its own `payment_id`. Requires [`initialize_database`] first.
 /// Like [`send_transaction`], the send continues if the Dart stream is closed.
 #[frb]
@@ -1001,6 +1086,16 @@ mod tests {
         .unwrap();
         crate::api::db::release_expired_reservations(&conn);
         assert_eq!(output_status(&conn, output_id), "UNSPENT");
+    }
+
+    #[test]
+    fn node_reason_loses_format_characters() {
+        let reason = "Rejected\u{202E}gnp.exe\u{200B} by\u{FEFF} node\u{2066}x\u{2069}\u{00AD}";
+        assert_eq!(strip_format_chars(reason), "Rejectedgnp.exe by nodex");
+        assert_eq!(
+            strip_format_chars("plain ascii, ünïcode ok"),
+            "plain ascii, ünïcode ok"
+        );
     }
 
     #[test]
