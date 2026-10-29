@@ -5,6 +5,7 @@ use crate::api::config::{
 use crate::api::db::{get_db_connection, get_db_pool, release_expired_reservations};
 use crate::api::error::WalletError;
 use crate::api::network::{apply_network, parse_network, TariNetwork};
+use crate::api::scanner::stop_scan;
 use crate::api::transactions::DisplayedTransactionDto;
 use crate::domain::keys::key_manager_from_seed_words;
 use crate::domain::validation::{validate_recipient, validate_recipient_count};
@@ -16,6 +17,7 @@ use minotari_wallet::db::{
     CompletedTransactionStatus, WalletDbError,
 };
 use minotari_wallet::get_accounts;
+use minotari_wallet::transactions::abandon::AbandonSendError;
 use minotari_wallet::transactions::manager::{FinalizedSend, TransactionSender};
 use minotari_wallet::transactions::one_sided_transaction::Recipient;
 use tari_common::configuration::Network;
@@ -204,24 +206,29 @@ fn strip_format_chars(text: &str) -> String {
         .collect()
 }
 
-/// Give up a send the node has not accepted, and release its inputs.
+/// Give up a send the node has not taken, and release its inputs.
 ///
 /// `transaction_id` is the send's `DisplayedTransactionDto.id`; `passphrase`
 /// (**secret**) must open wallet `wallet_name`. Delegates to minotari: only a send
-/// the node never accepted can be abandoned, and unless `force` is set the node must
-/// have refused it repeatedly (it is stalled). A send the node accepted, or one
-/// without a change output, is always refused. Returns what abandoning does not do.
+/// that is not mined yet can be abandoned, and it must be stalled (the node refused
+/// its last broadcasts in a row). `force` skips that only for a send the node never
+/// accepted; a send it accepted once can only be abandoned once it has stalled. A
+/// send without a change output is always refused. Returns what abandoning does not
+/// do.
+///
+/// Any running scan is stopped (and waited for) first, so its rebroadcast cannot race
+/// the abandon; start the scan again afterwards.
 ///
 /// The original can still be mined if a node holds it: do not pay the same payee
 /// again until the abandoned send shows as rejected after later scans.
 ///
 /// Errors: `Invalid Passphrase`, `No accounts found for this wallet`,
-/// `Wallet Error: The node accepted this send; it cannot be abandoned`, and
-/// `Wallet Error: …` with minotari's reason (unknown send, already mined, not
-/// stalled, input already spent, change in use or already seen on chain).
-/// Requires [`initialize_database`] first.
+/// `Wallet Error: The node accepted this send; it can only be abandoned once it has
+/// stalled`, and `Wallet Error: …` with minotari's reason (unknown send, already
+/// mined, not stalled, input already spent, change in use or already seen on chain,
+/// no change output). Requires [`initialize_database`] first.
 #[frb]
-pub fn abandon_send(
+pub async fn abandon_send(
     wallet_name: String,
     passphrase: String,
     transaction_id: String,
@@ -231,34 +238,47 @@ pub fn abandon_send(
     let tx_id: u64 = transaction_id
         .parse()
         .map_err(|_| WalletError::wallet("Invalid transaction id"))?;
+    let tx_id = TxId::from(tx_id);
+
+    let account_id = {
+        let conn = get_db_connection()?;
+        let accounts = get_accounts(&conn, Some(&wallet_name))?;
+        let account = accounts.first().ok_or(WalletError::NoAccounts)?;
+        account
+            .decrypt_wallet_type(&passphrase)
+            .map_err(|e| match e {
+                WalletDbError::DecryptionFailed(_) => WalletError::InvalidPassphrase,
+                other => WalletError::wallet(other.to_string()),
+            })?;
+        account.id
+    };
+
+    // Rebroadcasts only happen inside a scan; stop it so none races the abandon.
+    stop_scan().await?;
 
     let mut conn = get_db_connection()?;
-    let accounts = get_accounts(&conn, Some(&wallet_name))?;
-    let account = accounts.first().ok_or(WalletError::NoAccounts)?;
-    account
-        .decrypt_wallet_type(&passphrase)
-        .map_err(|e| match e {
-            WalletDbError::DecryptionFailed(_) => WalletError::InvalidPassphrase,
-            other => WalletError::wallet(other.to_string()),
-        })?;
-
-    // `force` only skips the stall threshold: a send the node accepted (it may be in
-    // a mempool) is never abandoned, or a resend could pay the payee twice.
-    let tx_id = TxId::from(tx_id);
-    let send = get_completed_transaction_by_id(&conn, tx_id)
-        .map_err(|e| WalletError::database(e.to_string()))?;
-    if send.is_some_and(|s| {
-        s.account_id == account.id && s.status == CompletedTransactionStatus::Broadcast
-    }) {
-        return Err(
-            WalletError::wallet("The node accepted this send; it cannot be abandoned").into(),
-        );
-    }
+    // A send the node accepted once may still be in a mempool: `force` must not skip
+    // the stall check for it, or a resend could pay the payee twice.
+    let accepted = get_completed_transaction_by_id(&conn, tx_id)
+        .map_err(|e| WalletError::database(e.to_string()))?
+        .is_some_and(|s| {
+            s.account_id == account_id && s.status == CompletedTransactionStatus::Broadcast
+        });
 
     let abandoned = minotari_wallet::transactions::abandon::abandon_send(
-        &mut conn, account.id, tx_id, force, false, None,
+        &mut conn,
+        account_id,
+        tx_id,
+        force && !accepted,
+        false,
+        None,
     )
-    .map_err(|e| WalletError::wallet(e.to_string()))?;
+    .map_err(|e| match e {
+        AbandonSendError::NotStalled { .. } if accepted => WalletError::wallet(
+            "The node accepted this send; it can only be abandoned once it has stalled",
+        ),
+        other => WalletError::wallet(other.to_string()),
+    })?;
     Ok(abandoned.note().to_string())
 }
 

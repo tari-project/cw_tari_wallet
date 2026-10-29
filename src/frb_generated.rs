@@ -149,7 +149,7 @@ fn wire__crate__api__send_transaction__abandon_send_impl(
     rust_vec_len_: i32,
     data_len_: i32,
 ) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
             debug_name: "abandon_send",
             port: Some(port_),
@@ -170,17 +170,19 @@ fn wire__crate__api__send_transaction__abandon_send_impl(
             let api_transaction_id = <String>::sse_decode(&mut deserializer);
             let api_force = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
-            move |context| {
+            move |context| async move {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
-                    (move || {
+                    (move || async move {
                         let output_ok = crate::api::send_transaction::abandon_send(
                             api_wallet_name,
                             api_passphrase,
                             api_transaction_id,
                             api_force,
-                        )?;
+                        )
+                        .await?;
                         Ok(output_ok)
-                    })(),
+                    })()
+                    .await,
                 )
             }
         },

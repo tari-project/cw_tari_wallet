@@ -13,22 +13,27 @@ import 'transactions.dart';
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `from`, `from`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `send_transaction_multi_with_handler`, `send_transaction_with_handler`
 
-/// Give up a send the node has not accepted, and release its inputs.
+/// Give up a send the node has not taken, and release its inputs.
 ///
 /// `transaction_id` is the send's `DisplayedTransactionDto.id`; `passphrase`
 /// (**secret**) must open wallet `wallet_name`. Delegates to minotari: only a send
-/// the node never accepted can be abandoned, and unless `force` is set the node must
-/// have refused it repeatedly (it is stalled). A send the node accepted, or one
-/// without a change output, is always refused. Returns what abandoning does not do.
+/// that is not mined yet can be abandoned, and it must be stalled (the node refused
+/// its last broadcasts in a row). `force` skips that only for a send the node never
+/// accepted; a send it accepted once can only be abandoned once it has stalled. A
+/// send without a change output is always refused. Returns what abandoning does not
+/// do.
+///
+/// Any running scan is stopped (and waited for) first, so its rebroadcast cannot race
+/// the abandon; start the scan again afterwards.
 ///
 /// The original can still be mined if a node holds it: do not pay the same payee
 /// again until the abandoned send shows as rejected after later scans.
 ///
 /// Errors: `Invalid Passphrase`, `No accounts found for this wallet`,
-/// `Wallet Error: The node accepted this send; it cannot be abandoned`, and
-/// `Wallet Error: …` with minotari's reason (unknown send, already mined, not
-/// stalled, input already spent, change in use or already seen on chain).
-/// Requires [`initialize_database`] first.
+/// `Wallet Error: The node accepted this send; it can only be abandoned once it has
+/// stalled`, and `Wallet Error: …` with minotari's reason (unknown send, already
+/// mined, not stalled, input already spent, change in use or already seen on chain,
+/// no change output). Requires [`initialize_database`] first.
 Future<String> abandonSend(
         {required String walletName,
         required String passphrase,
