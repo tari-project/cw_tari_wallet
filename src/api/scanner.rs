@@ -566,7 +566,7 @@ where
 /// wallet is rolled back to that height after this scan owns the slot (so any
 /// previous scan has stopped) and before scanning starts.
 async fn run_scan<F>(
-    config: ScanConfiguration,
+    mut config: ScanConfiguration,
     rescan_from: Option<u64>,
     event_callback: F,
 ) -> Result<()>
@@ -590,10 +590,10 @@ where
     };
 
     // The passphrase arrives in the frozen public `ScanConfiguration.passphrase`
-    // (plain `String`). Move a copy into a zeroizing container so this function's
-    // local plaintext is wiped on drop, and pass it to `Scanner::new` by `&`
-    // (deref to `&str`) so nothing else clones it in the clear (Shared Contracts §3).
-    let passphrase = Zeroizing::new(config.passphrase.clone());
+    // (plain `String`). Move it (not a copy) into a zeroizing container so the
+    // plaintext is wiped on drop, and pass it to `Scanner::new` by `&` (deref to
+    // `&str`) so nothing else clones it in the clear (Shared Contracts §3).
+    let passphrase = Zeroizing::new(std::mem::take(&mut config.passphrase));
 
     let scanner_builder = Scanner::new(
         &passphrase,
