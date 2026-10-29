@@ -50,17 +50,24 @@ All new; no existing function, type, field, variant or error string changed.
   transaction, or `sendAll: true` (exactly one recipient) to sweep the wallet.
   Resolves to the new `SendResultDto { transaction, acceptedByNode, note?,
   nodeReason? }`: when `acceptedByNode` is `false` the send is recorded and
-  rebroadcast by the wallet, so show `note` and never resend.
+  rebroadcast by the wallet, so show `note` and never resend. `nodeReason` is the
+  node's text with Unicode format characters (bidi overrides, zero-width) removed.
   Empty `seedWords` signs with the stored wallet's keys (wrong passphrase →
   `Invalid Passphrase`; view-only wallet → `Signing Error: View-only wallets
   cannot send`, before anything is locked); that is how a key-imported wallet sends.
   `send_transaction` is unchanged and now runs through the same path.
+- `abandon_send(walletName, passphrase, transactionId, force)` → `String` (what
+  abandoning does not do): gives up a send the node never accepted and releases
+  its inputs, via minotari. Without `force` the send must be stalled. Errors:
+  `Invalid Passphrase`, `No accounts found for this wallet`, `Wallet Error: …`
+  (unknown send, already mined, not stalled, input spent, change in use or on
+  chain, no change output).
 - `estimate_transaction_fee_for_outputs(amount, numOutputs, priority, baseUrl, walletName)`
   → `FeeEstimate`.
 - `estimate_send_all_fee(walletName, recipientAddress, paymentId?, network?, confirmationWindow?)` →
   new `SendAllFeeEstimate { fee, amountAfterFee, inputCount, skippedDust, skippedOverCap }`.
-- `change_passphrase(walletName, oldPassphrase, newPassphrase)`; a wrong old
-  passphrase errors as `Invalid Passphrase`.
+- `change_passphrase(walletName, oldPassphrase, newPassphrase)` (async): stops
+  any running scan first; a wrong old passphrase errors as `Invalid Passphrase`.
 - `import_wallet_from_keys(walletName, viewPrivateKeyHex, spendPrivateKeyHex, birthday, passphrase, network?)`
   → `WalletCreationDetails` (spendable through `send_transaction_multi` with empty
   `seedWords`; `seedWords` in the result is `null`).
@@ -68,7 +75,9 @@ All new; no existing function, type, field, variant or error string changed.
   any running scan, rolls the wallet back to `fromHeight` (minotari), then scans as
   `start_scan` does. A wrong passphrase errors as `Invalid Passphrase` (also
   streamed as the terminal `error` event).
-- New `height` module: `get_height_at_time(baseUrl, epochSecs)` (async),
+- New `height` module: `get_height_at_time(baseUrl, epochSecs, network?)` (async;
+  refuses a node height more than 10% plus a day of blocks above the offline
+  estimate as `Network Error: Node reported an implausible height …`),
   `estimate_height_at_time(network?, epochSecs)`, `birthday_from_height(network?, height)`
   and `birthday_from_date(epochSecs)` (all three sync, offline).
 - `current_network()` (sync) → `TariNetwork?`: the network this process is locked to.
@@ -82,6 +91,10 @@ All new; no existing function, type, field, variant or error string changed.
   both are fed from the same internal stream, with reorgs and the tip dropped.
 
 ### Changed
+
+- Upstream's offline-signing payload summary (recipients, amounts, memos, fee,
+  change), logged on every send under `c::tx::offline_signing`, is capped at Warn
+  by default and in any `LoggerConfig` that does not set that target itself.
 
 - `stop_scan` now returns only once the running scan has actually stopped (Dart
   signature unchanged: `Future<void> stopScan()`).
