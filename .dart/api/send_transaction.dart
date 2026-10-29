@@ -13,15 +13,14 @@ import 'transactions.dart';
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `from`, `from`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `send_transaction_multi_with_handler`, `send_transaction_with_handler`
 
-/// Give up a send the node has not taken, and release its inputs.
+/// Give up a stalled send and release its inputs.
 ///
 /// `transaction_id` is the send's `DisplayedTransactionDto.id`; `passphrase`
-/// (**secret**) must open wallet `wallet_name`. Delegates to minotari: only a send
-/// that is not mined yet can be abandoned, and it must be stalled (the node refused
-/// its last broadcasts in a row). `force` skips that only for a send the node never
-/// accepted; a send it accepted once can only be abandoned once it has stalled. A
-/// send without a change output is always refused. Returns what abandoning does not
-/// do.
+/// (**secret**) must open wallet `wallet_name`. Delegates to minotari, which only
+/// abandons a send that is not mined and has stalled: the node refused its last
+/// rebroadcasts in a row (rebroadcasts happen while a scan runs, so keep scanning
+/// first). A mined send never stalls. A send without a change output is always
+/// refused. Returns what abandoning does not do.
 ///
 /// Any running scan is stopped (and waited for) first, so its rebroadcast cannot race
 /// the abandon; start the scan again afterwards.
@@ -30,20 +29,19 @@ import 'transactions.dart';
 /// again until the abandoned send shows as rejected after later scans.
 ///
 /// Errors: `Invalid Passphrase`, `No accounts found for this wallet`,
-/// `Wallet Error: The node accepted this send; it can only be abandoned once it has
-/// stalled`, and `Wallet Error: …` with minotari's reason (unknown send, already
-/// mined, not stalled, input already spent, change in use or already seen on chain,
-/// no change output). Requires [`initialize_database`] first.
+/// `Wallet Error: Invalid transaction id`, `Wallet Error: The send has not stalled
+/// yet; keep scanning so the wallet rebroadcasts it`, and `Wallet Error: …` with
+/// minotari's reason (unknown send, already mined, input already spent, change in use
+/// or already seen on chain, no change output). Requires [`initialize_database`]
+/// first.
 Future<String> abandonSend(
         {required String walletName,
         required String passphrase,
-        required String transactionId,
-        required bool force}) =>
+        required String transactionId}) =>
     RustLib.instance.api.crateApiSendTransactionAbandonSend(
         walletName: walletName,
         passphrase: passphrase,
-        transactionId: transactionId,
-        force: force);
+        transactionId: transactionId);
 
 /// Build, sign, and broadcast a one-sided transaction, streaming progress.
 ///
@@ -56,9 +54,10 @@ Future<String> abandonSend(
 /// scan's transaction monitor rebroadcasts it, so **do not resend after `Ok`**.
 /// Rebroadcast only happens while `start_scan` runs.
 /// `Network Error` only comes from failures before the send is recorded.
-/// [`send_transaction_multi`] reports whether the node accepted it; [`abandon_send`]
-/// gives up a send the node keeps refusing and releases its inputs (the original can
-/// still be mined, so do not pay the same payee again until it shows as rejected).
+/// [`send_transaction_multi`] reports whether the node accepted it. Keep scanning so it
+/// is rebroadcast; once it has stalled, [`abandon_send`] releases its inputs (the
+/// original can still be mined, so do not pay the same payee again until it shows as
+/// rejected).
 ///
 /// Async and streamed. The send **continues even if the Dart stream is closed**
 /// (a half-broadcast transaction must finish) — this deliberately differs from
@@ -75,9 +74,9 @@ Stream<SendTransactionEvent> sendTransaction(
 /// Streams the same [`SendTransactionEvent`] sequence as [`send_transaction`] and
 /// resolves to a [`SendResultDto`]: the recorded transaction plus whether the node
 /// accepted it. A send the node has not accepted yet still resolves `Ok` and is
-/// rebroadcast by the wallet; never resend it ([`abandon_send`] gives it up if the
-/// node keeps refusing it; the original can still be mined, so do not pay the same
-/// payee again until it shows as rejected). Each recipient gets its own output
+/// rebroadcast by the wallet while a scan runs; never resend it. Once it has stalled,
+/// [`abandon_send`] releases its inputs (the original can still be mined, so do not
+/// pay the same payee again until it shows as rejected). Each recipient gets its own output
 /// carrying its own `payment_id`. Requires [`initialize_database`] first.
 /// Like [`send_transaction`], the send continues if the Dart stream is closed.
 Stream<SendTransactionEvent> sendTransactionMulti(
@@ -178,9 +177,10 @@ class SendRecipient {
 /// **do not send it again**. `note` is the message to show the user in that case (or
 /// when the wallet could not record everything yet); `node_reason` is the node's
 /// answer when it did not accept the send (node-supplied text: display it as plain
-/// text). If the node keeps refusing it, [`abandon_send`] gives the send up and
-/// releases its inputs; the original can still be mined if a node holds it, so do
-/// not pay the same payee again until it shows as rejected.
+/// text). Keep scanning so the wallet rebroadcasts it; if the node keeps refusing it
+/// until it stalls, [`abandon_send`] gives it up and releases its inputs. The
+/// original can still be mined if a node holds it, so do not pay the same payee
+/// again until it shows as rejected.
 class SendResultDto {
   final DisplayedTransactionDto transaction;
   final bool acceptedByNode;

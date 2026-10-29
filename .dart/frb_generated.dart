@@ -102,8 +102,7 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiSendTransactionAbandonSend(
       {required String walletName,
       required String passphrase,
-      required String transactionId,
-      required bool force});
+      required String transactionId});
 
   int crateApiHeightBirthdayFromDate({required BigInt epochSecs});
 
@@ -324,15 +323,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<String> crateApiSendTransactionAbandonSend(
       {required String walletName,
       required String passphrase,
-      required String transactionId,
-      required bool force}) {
+      required String transactionId}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(walletName, serializer);
         sse_encode_String(passphrase, serializer);
         sse_encode_String(transactionId, serializer);
-        sse_encode_bool(force, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 3, port: port_);
       },
@@ -341,7 +338,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: sse_decode_AnyhowException,
       ),
       constMeta: kCrateApiSendTransactionAbandonSendConstMeta,
-      argValues: [walletName, passphrase, transactionId, force],
+      argValues: [walletName, passphrase, transactionId],
       apiImpl: this,
     ));
   }
@@ -349,7 +346,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiSendTransactionAbandonSendConstMeta =>
       const TaskConstMeta(
         debugName: "abandon_send",
-        argNames: ["walletName", "passphrase", "transactionId", "force"],
+        argNames: ["walletName", "passphrase", "transactionId"],
       );
 
   @override

@@ -56,17 +56,18 @@ All new; no existing function, type, field, variant or error string changed.
   `Invalid Passphrase`; view-only wallet → `Signing Error: View-only wallets
   cannot send`, before anything is locked); that is how a key-imported wallet sends.
   `send_transaction` is unchanged and now runs through the same path.
-- `abandon_send(walletName, passphrase, transactionId, force)` (async) → `String`
-  (what abandoning does not do): gives up a send the node has not taken and
-  releases its inputs, via minotari. The send must be stalled; `force` skips that
-  only for a send the node never accepted, so a send it accepted once (it may be in
-  a mempool) is abandoned only once it has stalled. Any running scan is stopped
-  first so its rebroadcast cannot race the abandon; start it again afterwards. The
-  original can still be mined if a node holds it, so do not pay the same payee
-  again until it shows as rejected. Errors: `Invalid Passphrase`, `No accounts
-  found for this wallet`, `Wallet Error: The node accepted this send; it can only
-  be abandoned once it has stalled`, `Wallet Error: …` (unknown send, already
-  mined, not stalled, input spent, change in use or on chain, no change output).
+- `abandon_send(walletName, passphrase, transactionId)` (async) → `String` (what
+  abandoning does not do): the recovery path for a send the node never takes. Keep
+  scanning so the wallet rebroadcasts it; once the node has refused it until it
+  stalls, `abandon_send` gives it up and releases its inputs, via minotari. There
+  is no force option: a send reset by a rescan or reorg can look unmined, and a
+  mined send never stalls. Any running scan is stopped first so its rebroadcast
+  cannot race the abandon; start it again afterwards. The original can still be
+  mined if a node holds it, so do not pay the same payee again until it shows as
+  rejected. Errors: `Invalid Passphrase`, `No accounts found for this wallet`,
+  `Wallet Error: Invalid transaction id`, `Wallet Error: The send has not stalled
+  yet; keep scanning so the wallet rebroadcasts it`, `Wallet Error: …` (unknown
+  send, already mined, input spent, change in use or on chain, no change output).
 - `estimate_transaction_fee_for_outputs(amount, numOutputs, priority, baseUrl, walletName)`
   → `FeeEstimate`.
 - `estimate_send_all_fee(walletName, recipientAddress, paymentId?, network?, confirmationWindow?)` →

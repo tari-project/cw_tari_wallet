@@ -168,7 +168,6 @@ fn wire__crate__api__send_transaction__abandon_send_impl(
             let api_wallet_name = <String>::sse_decode(&mut deserializer);
             let api_passphrase = <String>::sse_decode(&mut deserializer);
             let api_transaction_id = <String>::sse_decode(&mut deserializer);
-            let api_force = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
@@ -177,7 +176,6 @@ fn wire__crate__api__send_transaction__abandon_send_impl(
                             api_wallet_name,
                             api_passphrase,
                             api_transaction_id,
-                            api_force,
                         )
                         .await?;
                         Ok(output_ok)

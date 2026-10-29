@@ -957,18 +957,35 @@ fn key_imported_wallet_sends_with_its_stored_keys() {
     assert!(get_balance("keyed".to_string()).unwrap().locked > 0);
 }
 
-/// A send the node never accepted can be abandoned, releasing its inputs.
-#[test]
-fn abandon_send_releases_a_send_the_node_never_accepted() {
-    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
-    let funded = with_funded_wallet();
-
-    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let sent = runtime
+/// Send 100_000 to the fixture wallet through a mock node answering `submit` with
+/// `accepted`, or (`None`) a node that answers nothing.
+fn send_via_mock_node(
+    funded: &FundedWallet,
+    runtime: &tokio::runtime::Runtime,
+    accepted: Option<bool>,
+) -> rust_lib_flutter_rust_wallet::api::send_transaction::SendResultDto {
+    runtime
         .block_on(async {
             let server = wiremock::MockServer::start().await;
+            if let Some(accepted) = accepted {
+                wiremock::Mock::given(wiremock::matchers::method("POST"))
+                    .and(wiremock::matchers::path("/json_rpc"))
+                    .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": "1",
+                            "result": {
+                                "accepted": accepted,
+                                "rejection_reason": "None",
+                                "is_synced": true
+                            }
+                        }),
+                    ))
+                    .mount(&server)
+                    .await;
+            }
             let details = funded_send(
-                &funded,
+                funded,
                 vec![SendRecipient {
                     address: funded.recipient.clone(),
                     amount: 100_000,
@@ -979,45 +996,69 @@ fn abandon_send_releases_a_send_the_node_never_accepted() {
             );
             send_transaction_multi_with_handler(details, |_| {}).await
         })
-        .expect("send");
+        .expect("send")
+}
+
+/// Record that the node refused the send's last rebroadcasts until it stalled, as
+/// the scan's transaction monitor does.
+fn stall(funded: &FundedWallet, transaction_id: &str) {
+    let pool = minotari_wallet::db::init_db(funded.db_path.clone()).expect("pool");
+    let tx_id: u64 = transaction_id.parse().expect("numeric tx id");
+    minotari_wallet::db::record_failed_broadcast_attempt(
+        &pool.get().expect("conn"),
+        tari_common_types::transaction::TxId::from(tx_id),
+        minotari_wallet::transactions::monitor::MAX_BROADCAST_ATTEMPTS,
+        "not accepted",
+    )
+    .expect("record attempts");
+}
+
+const NOT_STALLED: &str =
+    "Wallet Error: The send has not stalled yet; keep scanning so the wallet rebroadcasts it";
+
+/// A send the node never accepted is abandoned only once it has stalled; then its
+/// inputs are released. A running scan is stopped first.
+#[test]
+fn abandon_send_releases_a_stalled_send() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+    let sent = send_via_mock_node(&funded, &runtime, None);
     assert!(!sent.accepted_by_node);
-    assert!(get_balance(FUNDED.to_string()).unwrap().locked > 0);
     assert_eq!(
         spendable_outputs(&funded),
         Some(FUNDED_VALUES.len() - 1),
         "the send holds one input"
     );
     let tx_id = sent.transaction.id;
-
-    let abandon = |passphrase: &str, id: &str, force: bool| {
+    let abandon = |passphrase: &str, id: &str| {
         runtime.block_on(abandon_send(
             FUNDED.to_string(),
             passphrase.to_string(),
             id.to_string(),
-            force,
         ))
     };
+
     assert_eq!(
-        abandon("wrong", &tx_id, true).unwrap_err().to_string(),
+        abandon("wrong", &tx_id).unwrap_err().to_string(),
         "Invalid Passphrase"
     );
     assert_eq!(
-        abandon(FUNDED_PASSPHRASE, "999", true)
-            .unwrap_err()
-            .to_string(),
+        abandon(FUNDED_PASSPHRASE, "999").unwrap_err().to_string(),
         "Wallet Error: No send 999 in this account"
     );
-    // Refused once, not yet stalled: needs force.
-    let not_stalled = abandon(FUNDED_PASSPHRASE, &tx_id, false).unwrap_err();
-    assert!(
-        not_stalled.to_string().starts_with("Wallet Error: ")
-            && not_stalled.to_string().contains("is not stalled"),
-        "got {not_stalled}"
+    assert_eq!(
+        abandon(FUNDED_PASSPHRASE, &tx_id).unwrap_err().to_string(),
+        NOT_STALLED
     );
+    assert!(get_balance(FUNDED.to_string()).unwrap().locked > 0);
+
+    stall(&funded, &tx_id);
 
     // A continuous scan is running; abandon_send stops it first.
     let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel();
-    let scan = runtime.block_on(async {
+    let (scan, _server) = runtime.block_on(async {
         let server = mock_chain_node().await;
         let config = ScanConfiguration {
             continuous: true,
@@ -1031,7 +1072,7 @@ fn abandon_send_releases_a_send_the_node_never_accepted() {
         (scan, server)
     });
 
-    let note = abandon(FUNDED_PASSPHRASE, &tx_id, true).expect("abandon_send");
+    let note = abandon(FUNDED_PASSPHRASE, &tx_id).expect("abandon_send");
     loop {
         match seen_rx.try_recv() {
             Ok(()) => continue,
@@ -1042,9 +1083,10 @@ fn abandon_send_releases_a_send_the_node_never_accepted() {
         }
     }
     runtime
-        .block_on(scan.0)
+        .block_on(scan)
         .unwrap()
         .expect("a stopped scan returns Ok");
+
     assert!(note.contains("inputs are released"), "got {note}");
     assert_eq!(get_balance(FUNDED.to_string()).unwrap().locked, 0);
     assert_eq!(
@@ -1054,83 +1096,31 @@ fn abandon_send_releases_a_send_the_node_never_accepted() {
     );
 }
 
-/// A send the node accepted once may still be in a mempool: `force` does not skip
-/// the stall check for it, but once it has stalled it can be abandoned.
+/// A send the node accepted is refused while it has not stalled.
 #[test]
-fn abandon_send_needs_an_accepted_send_to_have_stalled() {
+fn abandon_send_refuses_an_accepted_send_that_has_not_stalled() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let funded = with_funded_wallet();
-
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let sent = runtime
-        .block_on(async {
-            // A node that accepts every submitted transaction.
-            let server = wiremock::MockServer::start().await;
-            wiremock::Mock::given(wiremock::matchers::method("POST"))
-                .and(wiremock::matchers::path("/json_rpc"))
-                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "id": "1",
-                        "result": {
-                            "accepted": true,
-                            "rejection_reason": "None",
-                            "is_synced": true
-                        }
-                    }),
-                ))
-                .mount(&server)
-                .await;
-            let details = funded_send(
-                &funded,
-                vec![SendRecipient {
-                    address: funded.recipient.clone(),
-                    amount: 100_000,
-                    payment_id: None,
-                }],
-                false,
-                server.uri(),
-            );
-            send_transaction_multi_with_handler(details, |_| {}).await
-        })
-        .expect("send");
-    assert!(sent.accepted_by_node, "the mock node accepted the send");
+
+    let sent = send_via_mock_node(&funded, &runtime, Some(true));
+    assert!(sent.accepted_by_node);
     let locked = get_balance(FUNDED.to_string()).unwrap().locked;
     assert!(locked > 0);
-    let abandon = || {
-        runtime.block_on(abandon_send(
+
+    let err = runtime
+        .block_on(abandon_send(
             FUNDED.to_string(),
             FUNDED_PASSPHRASE.to_string(),
-            sent.transaction.id.clone(),
-            true,
+            sent.transaction.id,
         ))
-    };
-
-    let err = abandon().expect_err("an accepted, not stalled send cannot be abandoned");
-    assert_eq!(
-        err.to_string(),
-        "Wallet Error: The node accepted this send; it can only be abandoned once it has stalled"
-    );
+        .expect_err("an accepted send that has not stalled cannot be abandoned");
+    assert_eq!(err.to_string(), NOT_STALLED);
     assert_eq!(
         get_balance(FUNDED.to_string()).unwrap().locked,
         locked,
         "nothing was unlocked"
     );
-
-    // Later rebroadcasts are refused until the send stalls (as the monitor records).
-    let pool = minotari_wallet::db::init_db(funded.db_path.clone()).expect("pool");
-    let tx_id: u64 = sent.transaction.id.parse().expect("numeric tx id");
-    minotari_wallet::db::record_failed_broadcast_attempt(
-        &pool.get().expect("conn"),
-        tari_common_types::transaction::TxId::from(tx_id),
-        minotari_wallet::transactions::monitor::MAX_BROADCAST_ATTEMPTS,
-        "dropped from the mempool",
-    )
-    .expect("record attempts");
-
-    abandon().expect("a stalled accepted send can be abandoned");
-    assert_eq!(get_balance(FUNDED.to_string()).unwrap().locked, 0);
-    assert_eq!(spendable_outputs(&funded), Some(FUNDED_VALUES.len()));
 }
 
 /// A view-only wallet sending with its stored keys is refused before anything is
