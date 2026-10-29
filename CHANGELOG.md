@@ -110,6 +110,20 @@ All new; no existing function, type, field, variant or error string changed.
   reorganizedTransactions }`. The v1 `start_scan`/`rescan` streams are unchanged:
   both are fed from the same internal stream, with reorgs and the tip dropped.
 
+### Added (burn to Tari Ootle L2)
+
+- Burn to Tari Ootle (L2), additive (MINOR). `burn_to_l2(sink, BurnToL2Details)`
+  burns µT to an Ootle account public key, streaming the existing
+  `SendTransactionEvent`s, and resolves to a recorded `BurnTransactionDto`. The claim
+  key must be 64 hex characters that decode to a non-identity Ristretto point;
+  anything else is rejected with `Invalid Recipient Address: Invalid claim public
+  key: …` before any UTXO is reserved. No sidechain key is ever set.
+  `get_burn_proofs(wallet_name, network, base_url)` lists the wallet's burns as
+  `BurnProofDto`s and, for burns 3+ blocks deep, fetches the burn output proof,
+  writes the `CompleteClaimBurnProof` JSON to `<db dir>/burn_proofs/` and returns
+  it as `Ready`; the Ootle wallet claims with that JSON. Proofs need a base node
+  that still holds the burn's block (an archival node after the pruning horizon).
+
 ### Changed
 
 - Upstream's offline-signing payload summary (recipients, amounts, memos, fee,

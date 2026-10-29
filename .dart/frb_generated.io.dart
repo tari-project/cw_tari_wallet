@@ -6,6 +6,7 @@
 import 'api/address.dart';
 import 'api/balance.dart';
 import 'api/base_node.dart';
+import 'api/burn.dart';
 import 'api/db.dart';
 import 'api/fee.dart';
 import 'api/height.dart';
@@ -89,6 +90,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           dynamic raw);
 
   @protected
+  BurnToL2Details dco_decode_box_autoadd_burn_to_l_2_details(dynamic raw);
+
+  @protected
   CounterpartyInfoDto dco_decode_box_autoadd_counterparty_info_dto(dynamic raw);
 
   @protected
@@ -132,6 +136,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BigInt dco_decode_box_autoadd_u_64(dynamic raw);
 
   @protected
+  BurnProofDto dco_decode_burn_proof_dto(dynamic raw);
+
+  @protected
+  BurnProofStatus dco_decode_burn_proof_status(dynamic raw);
+
+  @protected
+  BurnToL2Details dco_decode_burn_to_l_2_details(dynamic raw);
+
+  @protected
+  BurnTransactionDto dco_decode_burn_transaction_dto(dynamic raw);
+
+  @protected
   CounterpartyInfoDto dco_decode_counterparty_info_dto(dynamic raw);
 
   @protected
@@ -166,6 +182,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<BurnProofDto> dco_decode_list_burn_proof_dto(dynamic raw);
 
   @protected
   List<DisplayedTransactionDto> dco_decode_list_displayed_transaction_dto(
@@ -342,6 +361,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           SseDeserializer deserializer);
 
   @protected
+  BurnToL2Details sse_decode_box_autoadd_burn_to_l_2_details(
+      SseDeserializer deserializer);
+
+  @protected
   CounterpartyInfoDto sse_decode_box_autoadd_counterparty_info_dto(
       SseDeserializer deserializer);
 
@@ -391,6 +414,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer);
 
   @protected
+  BurnProofDto sse_decode_burn_proof_dto(SseDeserializer deserializer);
+
+  @protected
+  BurnProofStatus sse_decode_burn_proof_status(SseDeserializer deserializer);
+
+  @protected
+  BurnToL2Details sse_decode_burn_to_l_2_details(SseDeserializer deserializer);
+
+  @protected
+  BurnTransactionDto sse_decode_burn_transaction_dto(
+      SseDeserializer deserializer);
+
+  @protected
   CounterpartyInfoDto sse_decode_counterparty_info_dto(
       SseDeserializer deserializer);
 
@@ -427,6 +463,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<BurnProofDto> sse_decode_list_burn_proof_dto(
+      SseDeserializer deserializer);
 
   @protected
   List<DisplayedTransactionDto> sse_decode_list_displayed_transaction_dto(
@@ -614,6 +654,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
           SensitiveSeeds self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_burn_to_l_2_details(
+      BurnToL2Details self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_counterparty_info_dto(
       CounterpartyInfoDto self, SseSerializer serializer);
 
@@ -664,6 +708,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer);
 
   @protected
+  void sse_encode_burn_proof_dto(BurnProofDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_burn_proof_status(
+      BurnProofStatus self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_burn_to_l_2_details(
+      BurnToL2Details self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_burn_transaction_dto(
+      BurnTransactionDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_counterparty_info_dto(
       CounterpartyInfoDto self, SseSerializer serializer);
 
@@ -700,6 +759,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_burn_proof_dto(
+      List<BurnProofDto> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_displayed_transaction_dto(

@@ -172,8 +172,10 @@ change).
 
 ## Streaming / async contract
 
-Six functions stream progress to Dart over an FRB `StreamSink`:
+Seven functions stream progress to Dart over an FRB `StreamSink`:
 `send_transaction` and `send_transaction_multi` (events: `SendTransactionEvent`),
+`burn_to_l2` (events: `SendTransactionEvent`; a burn, like a send, continues on a
+closed sink),
 `start_scan` and `rescan` (events: `ScanEventDto`), and `start_scan_v2` and
 `rescan_v2` (events: `ScanEventV2Dto`). The async/stream behavior is observable and
 therefore frozen.

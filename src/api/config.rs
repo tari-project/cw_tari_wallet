@@ -34,6 +34,9 @@ pub(crate) const DEFAULT_NUM_OUTPUTS: usize = 1;
 /// quoted amount is exactly what the send pays out.
 pub(crate) const SEND_FEE_PER_GRAM: u64 = 5;
 
+/// Directory, next to the wallet DB file, that completed burn claim proofs are written to.
+pub(crate) const BURN_PROOFS_DIR: &str = "burn_proofs";
+
 /// Response timeout (seconds) for the `check_node_health` probe. Short so a dead
 /// node fails fast.
 pub(crate) const HEALTH_TIMEOUT_SECS: u64 = 5;
