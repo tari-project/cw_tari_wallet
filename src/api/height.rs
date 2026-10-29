@@ -9,12 +9,15 @@ use crate::domain::text::strip_format_chars;
 use anyhow::Result;
 use flutter_rust_bridge::frb;
 use minotari_wallet::utils::height;
+use tari_common::configuration::Network;
 
 /// Ask the base node at `base_url` for the height of the block mined at `epoch_secs`
 /// (seconds since the Unix epoch) on `network` (`None` → MainNet).
 ///
-/// The answer is checked against [`estimate_height_at_time`]: a height more than two
-/// days of blocks above it is refused. The estimate itself runs high (real blocks
+/// On MainNet the answer is checked against [`estimate_height_at_time`]: a height
+/// more than two days of blocks above it is refused. Other networks get the node's
+/// answer unchecked: their block times swing too much for a tight bound and their
+/// coins have no value. The estimate itself runs high (real blocks
 /// are slightly slower than the target; about 17 days of blocks high by September
 /// 2026, growing over time), so a hostile node can still push a restore or rescan
 /// start that far plus two days late, but no further. Async; performs network I/O.
@@ -29,7 +32,11 @@ pub async fn get_height_at_time(
     let node_height = height::height_at_time(&base_url, epoch_secs)
         .await
         .map_err(|e| WalletError::network(strip_format_chars(&e.to_string())))?;
-    let estimate = height::estimate_height_at_time(parse_network(network), epoch_secs);
+    let network = parse_network(network);
+    if network != Network::MainNet {
+        return Ok(node_height);
+    }
+    let estimate = height::estimate_height_at_time(network, epoch_secs);
     let max_plausible = max_plausible_height(estimate);
     if node_height > max_plausible {
         return Err(WalletError::network(format!(

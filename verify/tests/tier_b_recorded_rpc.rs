@@ -134,6 +134,22 @@ async fn get_height_at_time_refuses_an_implausible_height() {
     );
 }
 
+/// The cap applies on MainNet only (`None` resolves to MainNet); other networks get
+/// the node's answer unchecked.
+#[tokio::test]
+async fn get_height_at_time_checks_mainnet_only() {
+    let server = node_answering_height(175_000).await;
+    let err = get_height_at_time(server.uri(), JAN_2026, None)
+        .await
+        .expect_err("None is MainNet, which is checked");
+    assert!(err.to_string().contains("implausible height"), "got {err}");
+
+    let height = get_height_at_time(server.uri(), JAN_2026, Some(TariNetwork::Esmeralda))
+        .await
+        .expect("other networks are not checked");
+    assert_eq!(height, 175_000);
+}
+
 #[tokio::test]
 async fn get_height_at_time_node_error_is_network_error() {
     // No route mounted: the node answers 404.

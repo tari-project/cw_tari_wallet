@@ -110,6 +110,16 @@ task. Each controller carries a monotonic `id`.
 - **Safe clean-up.** A scan only clears the slot if it still holds *its own*
   controller (matched by `id`), so a scan that has already been superseded never
   clobbers its successor.
+- **Cancelled in place.** `stop_scan` and teardown cancel the controller without
+  removing it; the scan's own task clears it on exit, so every later `stop_scan`
+  and every superseding scan can still wait for it.
+- **Maintenance guard.** `abandon_send` and `change_passphrase` hold a
+  `tokio::sync::Mutex` (`MAINTENANCE`) from before they stop the scan until their DB
+  write is done. A starting scan waits on it before installing; `stop_scan` never
+  takes it. Every cancel bumps a stop generation (`STOP_GENERATION`, even when the
+  slot is empty); a starting scan that sees it change while it waited returns `Ok`
+  without installing, so a `stop_scan` or teardown during maintenance also stops a
+  scan that was still queued.
 - As with the DB, the `std::sync::RwLock` guard is never held across `.await`.
 
 ### Network selection (`src/api/network.rs`)

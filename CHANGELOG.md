@@ -54,7 +54,8 @@ All new; no existing function, type, field, variant or error string changed.
   node's text with invisible characters (bidi overrides, zero-width, line
   separators, fillers, variation selectors) removed; the same cleaning applies to
   node text in `get_height_at_time` and send-broadcast `Network Error`s and in the
-  scans' terminal `error` event.
+  scans' terminal `error` event and returned error (which keeps its "Caused by"
+  chain).
   Empty `seedWords` signs with the stored wallet's keys (wrong passphrase →
   `Invalid Passphrase`; view-only wallet → `Signing Error: View-only wallets
   cannot send`, before anything is locked); that is how a key-imported wallet sends.
@@ -91,10 +92,12 @@ All new; no existing function, type, field, variant or error string changed.
   `start_scan` does. A wrong passphrase errors as `Invalid Passphrase` (also
   streamed as the terminal `error` event).
 - New `height` module: `get_height_at_time(baseUrl, epochSecs, network?)` (async;
-  refuses a node height more than two days of blocks above the offline estimate as
+  on MainNet, including `network: None`, refuses a node height more than two days
+  of blocks above the offline estimate as
   `Network Error: Node reported an implausible height …`; the estimate runs high,
   about 17 days of blocks by September 2026, so a hostile node can still push a
-  start that far plus two days late),
+  start that far plus two days late; other networks get the node's answer
+  unchecked, as their block times swing and their coins have no value),
   `estimate_height_at_time(network?, epochSecs)`, `birthday_from_height(network?, height)`
   and `birthday_from_date(epochSecs)` (all three sync, offline).
 - `current_network()` (sync) → `TariNetwork?`: the network this process is locked to.

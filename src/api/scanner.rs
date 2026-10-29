@@ -50,6 +50,10 @@ static SCAN_STATE: RwLock<Option<ScanController>> = RwLock::new(None);
 /// it.
 static MAINTENANCE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Bumped by every cancel (`stop_scan`, `disconnect_database`). A starting scan that
+/// sees it change while it waits for [`MAINTENANCE`] gives up instead of installing.
+static STOP_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 /// Start a maintenance operation: no scan can start until the guard is dropped.
 /// Stop the running scan (if any) after taking it.
 pub(crate) async fn begin_maintenance() -> tokio::sync::MutexGuard<'static, ()> {
@@ -94,6 +98,8 @@ pub(crate) fn cancel_active_scan() -> Result<()> {
 /// The controller stays in the slot until the scan's own task removes it on exit, so
 /// every later `stop_scan` and every superseding scan can still wait for it.
 fn cancel_current_scan() -> Result<Option<CancellationToken>> {
+    // Also stops a scan still waiting to install itself (see `STOP_GENERATION`).
+    STOP_GENERATION.fetch_add(1, Ordering::SeqCst);
     let guard = SCAN_STATE
         .read()
         .map_err(|_| WalletError::internal("Failed to acquire lock"))?;
@@ -586,6 +592,7 @@ async fn run_scan<F>(
 where
     F: Fn(ScanEventV2Dto) -> Result<()> + Send + Sync + 'static,
 {
+    let stop_generation = STOP_GENERATION.load(Ordering::SeqCst);
     let db_path = get_db_path()?;
 
     let cancel_token = CancellationToken::new();
@@ -632,8 +639,13 @@ where
     // *previous* scan that was never stopped: preserve "latest scan wins" by
     // cleanly cancelling and awaiting it here (the original code silently
     // overwrote the slot, orphaning the old scan's forwarder task).
-    // Wait out a maintenance operation in progress before taking the slot.
+    // Wait out a maintenance operation in progress before taking the slot. A stop
+    // issued meanwhile found no scan in the slot to cancel: honour it here.
     let maintenance = MAINTENANCE.lock().await;
+    if STOP_GENERATION.load(Ordering::SeqCst) != stop_generation {
+        forwarder.abort();
+        return Ok(());
+    }
     let previous = install_scan_controller(ScanController {
         id: scan_id,
         token: cancel_token.clone(),
@@ -703,14 +715,22 @@ where
     // State is cleared *above*, before this fallible terminal-event callback, so the
     // scan slot is guaranteed empty even if `event_callback` itself fails here.
     if let Err(e) = result {
-        // Terminal `Error` event for the stream (preserved exactly: scan failure
-        // still emits one `ScanEventDto::Error` then returns `Err`). The text can
-        // carry node-supplied words, so invisible characters are dropped.
-        let message = strip_format_chars(&e.to_string());
-        let _ = event_callback(ScanEventV2Dto::Error(message.clone()));
-        return Err(anyhow!(message));
+        let (message, error) = scan_failure(e);
+        let _ = event_callback(ScanEventV2Dto::Error(message));
+        return Err(error);
     }
     Ok(())
+}
+
+/// The terminal `Error` event text and the returned error for a failed scan.
+///
+/// Both can carry node-supplied words, so invisible characters are dropped. Dart
+/// receives an error as its `{:?}` rendering (message plus "Caused by" chain), so the
+/// returned error carries that whole rendering, cleaned, as its message.
+fn scan_failure(e: anyhow::Error) -> (String, anyhow::Error) {
+    let message = strip_format_chars(&e.to_string());
+    let error = anyhow!(strip_format_chars(&format!("{e:?}")));
+    (message, error)
 }
 
 /// Stop a scan this one replaced: cancel it and wait until its task has returned,
@@ -1203,6 +1223,71 @@ mod tests {
 
         crate::api::db::disconnect_database().unwrap();
         let _ = std::fs::remove_file(&db_path);
+    }
+
+    /// A scan waiting on the maintenance guard when `stop_scan` runs never installs.
+    #[tokio::test]
+    async fn scan_stopped_while_waiting_for_maintenance_never_runs() {
+        let _guard = crate::api::db::GLOBAL_STATE_TEST_LOCK.lock().await;
+        let _ = take_scan_controller().unwrap();
+        let db_path = std::env::temp_dir().join(format!("cw-maint-stop-{}.db", std::process::id()));
+        crate::api::db::initialize_database(db_path.to_string_lossy().to_string()).unwrap();
+
+        let maintenance = begin_maintenance().await;
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        // A rescan of a missing wallet fails as soon as it reaches the DB.
+        let rescan = {
+            let events = events.clone();
+            tokio::spawn(rescan_v2_with_handler(
+                0,
+                ScanConfiguration {
+                    wallet_name: "missing".to_string(),
+                    passphrase: String::new(),
+                    base_url: "http://127.0.0.1:1".to_string(),
+                    batch_size: 10,
+                    continuous: false,
+                    poll_interval_seconds: 1,
+                    required_confirmations: 3,
+                },
+                move |event| {
+                    events.lock().unwrap().push(event);
+                    Ok(())
+                },
+            ))
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        stop_scan().await.unwrap();
+        drop(maintenance);
+
+        rescan
+            .await
+            .unwrap()
+            .expect("a stopped scan returns Ok without running");
+        assert!(events.lock().unwrap().is_empty(), "nothing ran");
+        assert!(SCAN_STATE.read().unwrap().is_none(), "it never installed");
+
+        crate::api::db::disconnect_database().unwrap();
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    /// Dart gets an error as its `{:?}` rendering; a failed scan's returned error
+    /// renders exactly as the plain `anyhow!(ScanError)` it replaced.
+    #[test]
+    fn scan_failure_keeps_the_error_chain() {
+        let scan_error = || {
+            ScanError::DbError(WalletDbError::DecryptionFailed(
+                "Failed to decrypt wallet data".to_string(),
+            ))
+        };
+        let old = format!("{:?}", anyhow!(scan_error()));
+        let (message, error) = scan_failure(anyhow!(scan_error()));
+        assert_eq!(format!("{error:?}"), old);
+        assert_eq!(message, scan_error().to_string());
+        assert!(old.contains("Caused by"), "the chain is rendered: {old}");
+
+        let (message, error) = scan_failure(anyhow!("bad\u{202E}node"));
+        assert_eq!(message, "badnode");
+        assert_eq!(format!("{error:?}"), "badnode");
     }
 
     // --- run_forwarder async/stream-lifecycle tests -----------------------------
