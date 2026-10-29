@@ -160,7 +160,9 @@ abstract class RustLibApi extends BaseApi {
       {required String walletName});
 
   Future<BigInt> crateApiHeightGetHeightAtTime(
-      {required String baseUrl, required BigInt epochSecs});
+      {required String baseUrl,
+      required BigInt epochSecs,
+      TariNetwork? network});
 
   Future<SensitiveSeeds> crateApiWalletGetSeedWords({required String password});
 
@@ -772,12 +774,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Future<BigInt> crateApiHeightGetHeightAtTime(
-      {required String baseUrl, required BigInt epochSecs}) {
+      {required String baseUrl,
+      required BigInt epochSecs,
+      TariNetwork? network}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(baseUrl, serializer);
         sse_encode_u_64(epochSecs, serializer);
+        sse_encode_opt_box_autoadd_tari_network(network, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 19, port: port_);
       },
@@ -786,7 +791,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: sse_decode_AnyhowException,
       ),
       constMeta: kCrateApiHeightGetHeightAtTimeConstMeta,
-      argValues: [baseUrl, epochSecs],
+      argValues: [baseUrl, epochSecs, network],
       apiImpl: this,
     ));
   }
@@ -794,7 +799,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiHeightGetHeightAtTimeConstMeta =>
       const TaskConstMeta(
         debugName: "get_height_at_time",
-        argNames: ["baseUrl", "epochSecs"],
+        argNames: ["baseUrl", "epochSecs", "network"],
       );
 
   @override

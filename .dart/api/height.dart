@@ -7,15 +7,22 @@ import '../frb_generated.dart';
 import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These functions are ignored because they are not marked as `pub`: `max_plausible_height`
+
 /// Ask the base node at `base_url` for the height of the block mined at `epoch_secs`
-/// (seconds since the Unix epoch).
+/// (seconds since the Unix epoch) on `network` (`None` → MainNet).
 ///
-/// Async; performs network I/O. Errors as `Network Error: …` if the URL is invalid or
-/// the node cannot answer. Use [`estimate_height_at_time`] when offline.
+/// The answer is checked against [`estimate_height_at_time`], which runs high: a
+/// height more than 10% plus a day of blocks above it is refused, so a hostile node
+/// cannot push a restore or rescan start past the wallet's funds. Async; performs
+/// network I/O. Errors as `Network Error: …` if the URL is invalid, the node cannot
+/// answer, or its answer is implausible.
 Future<BigInt> getHeightAtTime(
-        {required String baseUrl, required BigInt epochSecs}) =>
-    RustLib.instance.api
-        .crateApiHeightGetHeightAtTime(baseUrl: baseUrl, epochSecs: epochSecs);
+        {required String baseUrl,
+        required BigInt epochSecs,
+        TariNetwork? network}) =>
+    RustLib.instance.api.crateApiHeightGetHeightAtTime(
+        baseUrl: baseUrl, epochSecs: epochSecs, network: network);
 
 /// Estimate, without a node, the height of the block mined at `epoch_secs` on
 /// `network` (`None` → MainNet).

@@ -13,7 +13,7 @@ use rust_lib_flutter_rust_wallet::api::base_node::{
     check_node_health, get_tip_info, is_node_synced,
 };
 use rust_lib_flutter_rust_wallet::api::height::get_height_at_time;
-use rust_lib_flutter_rust_wallet::api::network::current_network;
+use rust_lib_flutter_rust_wallet::api::network::{current_network, TariNetwork};
 use verify::fixture::rpc;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -98,27 +98,47 @@ async fn check_node_health_false_when_node_unreachable() {
     );
 }
 
-#[tokio::test]
-async fn get_height_at_time_returns_the_node_height() {
+/// 2026-01-01; a mainnet node reported height 170_622 for it.
+const JAN_2026: u64 = 1_767_225_600;
+
+async fn node_answering_height(height: u64) -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/get_height_at_time"))
-        .and(query_param("time", "1700000000"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(123_456u64))
+        .and(query_param("time", JAN_2026.to_string()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(height))
         .mount(&server)
         .await;
+    server
+}
 
-    let height = get_height_at_time(server.uri(), 1_700_000_000)
+#[tokio::test]
+async fn get_height_at_time_returns_the_node_height() {
+    let server = node_answering_height(170_622).await;
+    let height = get_height_at_time(server.uri(), JAN_2026, Some(TariNetwork::MainNet))
         .await
         .expect("get_height_at_time");
-    assert_eq!(height, 123_456);
+    assert_eq!(height, 170_622);
+}
+
+#[tokio::test]
+async fn get_height_at_time_refuses_an_implausible_height() {
+    let server = node_answering_height(500_000).await;
+    let err = get_height_at_time(server.uri(), JAN_2026, Some(TariNetwork::MainNet))
+        .await
+        .expect_err("a height far above the estimate must be refused");
+    assert!(
+        err.to_string()
+            .starts_with("Network Error: Node reported an implausible height 500000"),
+        "got {err}"
+    );
 }
 
 #[tokio::test]
 async fn get_height_at_time_node_error_is_network_error() {
     // No route mounted: the node answers 404.
     let server = MockServer::start().await;
-    let err = get_height_at_time(server.uri(), 1_700_000_000)
+    let err = get_height_at_time(server.uri(), JAN_2026, None)
         .await
         .expect_err("a failing node must error");
     assert!(err.to_string().starts_with("Network Error: "), "got {err}");

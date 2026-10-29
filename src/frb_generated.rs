@@ -780,13 +780,18 @@ fn wire__crate__api__height__get_height_at_time_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_base_url = <String>::sse_decode(&mut deserializer);
             let api_epoch_secs = <u64>::sse_decode(&mut deserializer);
+            let api_network =
+                <Option<crate::api::network::TariNetwork>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || async move {
-                        let output_ok =
-                            crate::api::height::get_height_at_time(api_base_url, api_epoch_secs)
-                                .await?;
+                        let output_ok = crate::api::height::get_height_at_time(
+                            api_base_url,
+                            api_epoch_secs,
+                            api_network,
+                        )
+                        .await?;
                         Ok(output_ok)
                     })()
                     .await,
