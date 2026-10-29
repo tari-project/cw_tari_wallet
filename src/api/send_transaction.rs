@@ -11,7 +11,10 @@ use crate::domain::validation::{validate_recipient, validate_recipient_count};
 use crate::frb_generated::StreamSink;
 use anyhow::Result;
 use flutter_rust_bridge::frb;
-use minotari_wallet::db::{expire_and_unlock_pending_transaction, WalletDbError};
+use minotari_wallet::db::{
+    expire_and_unlock_pending_transaction, get_completed_transaction_by_id,
+    CompletedTransactionStatus, WalletDbError,
+};
 use minotari_wallet::get_accounts;
 use minotari_wallet::transactions::manager::{FinalizedSend, TransactionSender};
 use minotari_wallet::transactions::one_sided_transaction::Recipient;
@@ -146,7 +149,8 @@ pub struct SendTransactionEvent {
 /// when the wallet could not record everything yet); `node_reason` is the node's
 /// answer when it did not accept the send (node-supplied text: display it as plain
 /// text). If the node keeps refusing it, [`abandon_send`] gives the send up and
-/// releases its inputs.
+/// releases its inputs; the original can still be mined if a node holds it, so do
+/// not pay the same payee again until it shows as rejected.
 #[frb]
 #[derive(Debug, Clone)]
 pub struct SendResultDto {
@@ -204,12 +208,15 @@ fn strip_format_chars(text: &str) -> String {
 ///
 /// `transaction_id` is the send's `DisplayedTransactionDto.id`; `passphrase`
 /// (**secret**) must open wallet `wallet_name`. Delegates to minotari: only a send
-/// that is not mined yet can be abandoned, and unless `force` is set the node must
-/// have refused it repeatedly (it is stalled). A send without a change output is
-/// always refused. Returns what abandoning does not do: if a node still holds the
-/// transaction it can still be mined, and the wallet then shows it as mined.
+/// the node never accepted can be abandoned, and unless `force` is set the node must
+/// have refused it repeatedly (it is stalled). A send the node accepted, or one
+/// without a change output, is always refused. Returns what abandoning does not do.
 ///
-/// Errors: `Invalid Passphrase`, `No accounts found for this wallet`, and
+/// The original can still be mined if a node holds it: do not pay the same payee
+/// again until the abandoned send shows as rejected after later scans.
+///
+/// Errors: `Invalid Passphrase`, `No accounts found for this wallet`,
+/// `Wallet Error: The node accepted this send; it cannot be abandoned`, and
 /// `Wallet Error: …` with minotari's reason (unknown send, already mined, not
 /// stalled, input already spent, change in use or already seen on chain).
 /// Requires [`initialize_database`] first.
@@ -235,13 +242,21 @@ pub fn abandon_send(
             other => WalletError::wallet(other.to_string()),
         })?;
 
+    // `force` only skips the stall threshold: a send the node accepted (it may be in
+    // a mempool) is never abandoned, or a resend could pay the payee twice.
+    let tx_id = TxId::from(tx_id);
+    let send = get_completed_transaction_by_id(&conn, tx_id)
+        .map_err(|e| WalletError::database(e.to_string()))?;
+    if send.is_some_and(|s| {
+        s.account_id == account.id && s.status == CompletedTransactionStatus::Broadcast
+    }) {
+        return Err(
+            WalletError::wallet("The node accepted this send; it cannot be abandoned").into(),
+        );
+    }
+
     let abandoned = minotari_wallet::transactions::abandon::abandon_send(
-        &mut conn,
-        account.id,
-        TxId::from(tx_id),
-        force,
-        false,
-        None,
+        &mut conn, account.id, tx_id, force, false, None,
     )
     .map_err(|e| WalletError::wallet(e.to_string()))?;
     Ok(abandoned.note().to_string())
@@ -552,7 +567,8 @@ fn map_signing_error(e: TransactionBuilderError) -> WalletError {
 /// Rebroadcast only happens while `start_scan` runs.
 /// `Network Error` only comes from failures before the send is recorded.
 /// [`send_transaction_multi`] reports whether the node accepted it; [`abandon_send`]
-/// gives up a send the node keeps refusing and releases its inputs.
+/// gives up a send the node keeps refusing and releases its inputs (the original can
+/// still be mined, so do not pay the same payee again until it shows as rejected).
 ///
 /// Async and streamed. The send **continues even if the Dart stream is closed**
 /// (a half-broadcast transaction must finish) — this deliberately differs from
@@ -582,7 +598,8 @@ pub async fn send_transaction(
 /// resolves to a [`SendResultDto`]: the recorded transaction plus whether the node
 /// accepted it. A send the node has not accepted yet still resolves `Ok` and is
 /// rebroadcast by the wallet; never resend it ([`abandon_send`] gives it up if the
-/// node keeps refusing it). Each recipient gets its own output
+/// node keeps refusing it; the original can still be mined, so do not pay the same
+/// payee again until it shows as rejected). Each recipient gets its own output
 /// carrying its own `payment_id`. Requires [`initialize_database`] first.
 /// Like [`send_transaction`], the send continues if the Dart stream is closed.
 #[frb]

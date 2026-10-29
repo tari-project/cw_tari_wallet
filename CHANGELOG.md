@@ -58,10 +58,13 @@ All new; no existing function, type, field, variant or error string changed.
   `send_transaction` is unchanged and now runs through the same path.
 - `abandon_send(walletName, passphrase, transactionId, force)` → `String` (what
   abandoning does not do): gives up a send the node never accepted and releases
-  its inputs, via minotari. Without `force` the send must be stalled. Errors:
-  `Invalid Passphrase`, `No accounts found for this wallet`, `Wallet Error: …`
-  (unknown send, already mined, not stalled, input spent, change in use or on
-  chain, no change output).
+  its inputs, via minotari. Without `force` the send must be stalled; a send the
+  node accepted is never abandoned. The original can still be mined if a node
+  holds it, so do not pay the same payee again until it shows as rejected.
+  Errors: `Invalid Passphrase`, `No accounts found for this wallet`,
+  `Wallet Error: The node accepted this send; it cannot be abandoned`,
+  `Wallet Error: …` (unknown send, already mined, not stalled, input spent,
+  change in use or on chain, no change output).
 - `estimate_transaction_fee_for_outputs(amount, numOutputs, priority, baseUrl, walletName)`
   → `FeeEstimate`.
 - `estimate_send_all_fee(walletName, recipientAddress, paymentId?, network?, confirmationWindow?)` →

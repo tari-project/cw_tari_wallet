@@ -1023,6 +1023,68 @@ fn abandon_send_releases_a_send_the_node_never_accepted() {
     );
 }
 
+/// A send the node accepted is never abandoned, even with `force`: it may be in a
+/// mempool, and releasing its inputs could let a resend pay the payee twice.
+#[test]
+fn abandon_send_refuses_a_send_the_node_accepted() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let sent = runtime
+        .block_on(async {
+            // A node that accepts every submitted transaction.
+            let server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path("/json_rpc"))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": "1",
+                        "result": {
+                            "accepted": true,
+                            "rejection_reason": "None",
+                            "is_synced": true
+                        }
+                    }),
+                ))
+                .mount(&server)
+                .await;
+            let details = funded_send(
+                &funded,
+                vec![SendRecipient {
+                    address: funded.recipient.clone(),
+                    amount: 100_000,
+                    payment_id: None,
+                }],
+                false,
+                server.uri(),
+            );
+            send_transaction_multi_with_handler(details, |_| {}).await
+        })
+        .expect("send");
+    assert!(sent.accepted_by_node, "the mock node accepted the send");
+    let locked = get_balance(FUNDED.to_string()).unwrap().locked;
+    assert!(locked > 0);
+
+    let err = abandon_send(
+        FUNDED.to_string(),
+        FUNDED_PASSPHRASE.to_string(),
+        sent.transaction.id,
+        true,
+    )
+    .expect_err("an accepted send cannot be abandoned");
+    assert_eq!(
+        err.to_string(),
+        "Wallet Error: The node accepted this send; it cannot be abandoned"
+    );
+    assert_eq!(
+        get_balance(FUNDED.to_string()).unwrap().locked,
+        locked,
+        "nothing was unlocked"
+    );
+}
+
 /// A view-only wallet sending with its stored keys is refused before anything is
 /// locked.
 #[test]
