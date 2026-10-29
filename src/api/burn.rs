@@ -277,9 +277,14 @@ pub async fn get_burn_proofs(
     let mut out = Vec::with_capacity(proofs.len());
     for proof in proofs {
         let path = proofs_dir.join(proof_file_name(&proof));
-        let result = match std::fs::read_to_string(&path) {
-            Ok(json) => Ok(json),
-            Err(_) => {
+        // The DB row is the record: minotari resets a complete row to pending when a reorg rolls
+        // back the burn's block, and the stale file must then be rebuilt, not served.
+        let saved = (proof.status == BURN_PROOF_STATUS_COMPLETE)
+            .then(|| std::fs::read_to_string(&path).ok())
+            .flatten();
+        let result = match saved {
+            Some(json) => Ok(json),
+            None => {
                 let client = match &client {
                     Some(c) => c,
                     None => client.insert(base_node_client(base_url.as_deref())?),
@@ -342,7 +347,6 @@ async fn refresh_proof(
     let json = assemble_claim_proof(proof, output_proof, network).map_err(|e| e.to_string())?;
     write_atomically(path, &json).map_err(|e| format!("Failed to save the burn proof: {e}"))?;
 
-    // The file is the record; the status only mirrors it for minotari's own worker.
     match get_db_connection() {
         Ok(conn) => {
             if let Err(e) = mark_burn_proof_complete(&conn, proof.id) {
@@ -394,6 +398,9 @@ fn release_burn_reservation(conn: &Connection, account_id: i64, idempotency_key:
         );
     }
 }
+
+/// minotari's `BURN_PROOF_STATUS_COMPLETE`, which its `db` module does not re-export.
+const BURN_PROOF_STATUS_COMPLETE: &str = "complete";
 
 /// Every burn proof row of one account, oldest first. minotari only lists pending rows
 /// across all accounts, so the query lives here.
