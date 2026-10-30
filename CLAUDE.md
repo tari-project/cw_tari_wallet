@@ -30,10 +30,10 @@ Two layers (full detail in `docs/ARCHITECTURE.md`):
 
 **Process-global state** (each encapsulated behind one module; a `std::sync::RwLock` guard is **never held across `.await`**):
 - **DB singleton** (`src/api/db.rs`) — SQLite pool + path behind `static RwLock<Option<Database>>`; access only via `get_db_connection`/`get_db_path`/`get_db_pool`. `disconnect_database` does a graceful shutdown (cancels any in-flight scan before dropping the pool).
-- **Scan lifecycle** (`src/api/scanner.rs`) — single "current scan" slot with cancel token + forwarder `JoinHandle`. Latest-wins (a new scan cancels+awaits the one it replaces); a scan only clears the slot if it still owns it (matched by monotonic `id`).
+- **Scan lifecycle** (`src/api/scanner.rs`) — single "current scan" slot with cancel token + forwarder `JoinHandle`. Latest-wins (a new scan cancels+awaits the one it replaces); a scan only clears the slot if it still owns it (matched by monotonic `id`). A cancel leaves the controller in the slot until the scan exits. `abandon_send`/`change_passphrase` hold a `MAINTENANCE` tokio mutex across stopping the scan and their DB write; a starting scan waits on it, and gives up without installing if a cancel bumped `STOP_GENERATION` meanwhile.
 - **Network** (`src/api/network.rs`) — write-once global in `tari_common`. `parse_network(None)` resolves to `Network::MainNet` — **frozen behavior** Cake Wallet depends on. `apply_network` is the single choke-point for installing it.
 
-**Other invariants:** all numeric/string defaults live once in `src/api/config.rs` (`pub(crate)`, value-guarded by tests). Secrets (seed words, passphrases, keys) are moved into zeroizing containers *inside* fn bodies without changing public field types; `SensitiveSeeds` is `#[frb(opaque)]` and crosses only via `reveal_seed_words`. Two streaming fns (`send_transaction`, `start_scan`) emit over an unbounded `mpsc` (lossless, in-order). Sink-closed is deliberately asymmetric: **scan cancels** on a closed sink, **send continues** (aborting a half-broadcast tx could lose funds).
+**Other invariants:** all numeric/string defaults live once in `src/api/config.rs` (`pub(crate)`, value-guarded by tests). Secrets (seed words, passphrases, keys) are moved into zeroizing containers *inside* fn bodies without changing public field types; `SensitiveSeeds` is `#[frb(opaque)]` and crosses only via `reveal_seed_words`. Six streaming fns: `send_transaction`, `send_transaction_multi`, `start_scan`, `start_scan_v2`, `rescan`, `rescan_v2`. The scans emit over an unbounded `mpsc` (lossless, in-order) and share one internal stream: v2 gets every event, v1 drops `ReorgDetected` and `tipHeight`. Sink-closed is deliberately asymmetric: **scans cancel** on a closed sink, **sends continue** (aborting a half-broadcast tx could lose funds). `stop_scan` returns only once the scan (and any it replaced) has stopped.
 
 ## The codegen workflow (most important contributor rule)
 
@@ -76,4 +76,4 @@ The `verify/` workspace member is the end-to-end harness: hermetic **Tier A** (f
 
 ## Key dependencies
 
-`minotari` is a **git pin** (`tari-project/minotari-cli`, specific rev); `tari_*` crates are pinned exactly (`=6.2.0-pre.1`). Bumping them is a coordinated procedure (see `CONTRIBUTING.md` → dependency & release management). Run `cargo deny check` per `deny.toml`.
+`minotari` is a **git pin** (`tari-project/minotari-cli`, specific rev); `tari_*` crates are pinned exactly (`=6.3.0-pre.1`). Bumping them is a coordinated procedure (see `CONTRIBUTING.md` → dependency & release management). Run `cargo deny check` per `deny.toml`.

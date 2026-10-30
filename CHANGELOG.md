@@ -36,7 +36,105 @@ diff) before the version is tagged.
 
 ## [Unreleased]
 
+### Added (additive Dart API, SPEC-06)
+
+All new; no existing function, type, field, variant or error string changed.
+
+- `sign_message_with_wallet(walletName, passphrase, message)` — signs with the
+  stored wallet's spend key, so Dart no longer needs the seed words. Errors:
+  `Signing Error: View-only wallets cannot sign messages`, `Invalid Passphrase`,
+  `No accounts found for this wallet`.
+- `send_transaction_multi(details: MultiSendTransactionDetails)` (stream of
+  `SendTransactionEvent`) with new `MultiSendTransactionDetails` and
+  `SendRecipient { address, amount, paymentId? }`: several recipients in one
+  transaction, or `sendAll: true` (exactly one recipient) to sweep the wallet.
+  Resolves to the new `SendResultDto { transaction, acceptedByNode, note?,
+  nodeReason? }`: when `acceptedByNode` is `false` the send is recorded and
+  rebroadcast by the wallet, so show `note` and never resend. `nodeReason` is the
+  node's text with invisible characters (bidi overrides, zero-width, line
+  separators, fillers, variation selectors) removed; the same cleaning applies to
+  node text in `get_height_at_time` and send-broadcast `Network Error`s and in the
+  scans' terminal `error` event and returned error (which keeps its "Caused by"
+  chain).
+  Empty `seedWords` signs with the stored wallet's keys (wrong passphrase →
+  `Invalid Passphrase`; view-only wallet → `Signing Error: View-only wallets
+  cannot send`, before anything is locked); that is how a key-imported wallet sends.
+  `send_transaction` is unchanged and now runs through the same path.
+- `abandon_send(walletName, passphrase, transactionId)` (async) → `String` (what
+  abandoning does not do): the recovery path for a send the node never takes. Keep
+  scanning so the wallet rebroadcasts it; once the node has refused it until it
+  stalls, `abandon_send` gives it up and releases its inputs, via minotari. There
+  is no force option: a send reset by a rescan or reorg can look unmined, and a
+  mined send never stalls. Any running scan is stopped first so its rebroadcast
+  cannot race the abandon, and a scan started meanwhile waits until it is done;
+  start it again afterwards. The original can still be mined if a node holds it:
+  right after an abandon, `Rejected` means "not known to be mined", not "will not
+  be mined", so do not treat it as proof until later scans from a trusted node. If
+  paying again, prefer a send that spends the same inputs (minotari's largest-first
+  selection usually picks the released inputs again, so a same-amount resend
+  normally conflicts with the original rather than paying twice). Errors: `Invalid Passphrase`, `No accounts found for this wallet`,
+  `Wallet Error: Invalid transaction id`, `Wallet Error: The send has not stalled
+  yet; keep scanning so the wallet rebroadcasts it`, `Wallet Error: …` (unknown
+  send, already mined, input spent, change in use or on chain, no change output).
+- `estimate_transaction_fee_for_outputs(amount, numOutputs, priority, baseUrl, walletName)`
+  → `FeeEstimate`.
+- `estimate_send_all_fee(walletName, recipientAddress, paymentId?, network?, confirmationWindow?)` →
+  new `SendAllFeeEstimate { fee, amountAfterFee, inputCount, skippedDust, skippedOverCap }`.
+- `change_passphrase(walletName, oldPassphrase, newPassphrase)` (async): checks
+  the old passphrase first (`Invalid Passphrase`, leaving a running scan alone;
+  unknown wallet → `No accounts found for this wallet`), then stops any running
+  scan and keeps new scans waiting until the rewrite is done.
+- `import_wallet_from_keys(walletName, viewPrivateKeyHex, spendPrivateKeyHex, birthday, passphrase, network?)`
+  → `WalletCreationDetails` (spendable through `send_transaction_multi` with empty
+  `seedWords`; `seedWords` in the result is `null`).
+- `rescan(fromHeight, config: ScanConfiguration)` → `Stream<ScanEventDto>`: stops
+  any running scan, rolls the wallet back to `fromHeight` (minotari), then scans as
+  `start_scan` does. A wrong passphrase errors as `Invalid Passphrase` (also
+  streamed as the terminal `error` event).
+- New `height` module: `get_height_at_time(baseUrl, epochSecs, network?)` (async;
+  on MainNet, including `network: None`, refuses a node height more than two days
+  of blocks above the offline estimate as
+  `Network Error: Node reported an implausible height …`; the estimate runs high,
+  about 17 days of blocks by September 2026, so a hostile node can still push a
+  start that far plus two days late; other networks get the node's answer
+  unchecked, as their block times swing and their coins have no value),
+  `estimate_height_at_time(network?, epochSecs)`, `birthday_from_height(network?, height)`
+  and `birthday_from_date(epochSecs)` (all three sync, offline).
+- `current_network()` (sync) → `TariNetwork?`: the network this process is locked to.
+- `start_scan_v2(config)` and `rescan_v2(fromHeight, config)` →
+  `Stream<ScanEventV2Dto>`, a new flat event type: `started`, `progress` (with
+  `tipHeight`), `completed`, `paused`, `waiting` (caught up, polling),
+  `moreBlocksAvailable`, `transactionsReady`, `transactionsUpdated`,
+  `reorgDetected(ReorgDetectedDto)` and `error`. New `ReorgDetectedDto { accountId,
+  reorgFromHeight, newHeight, blocksRolledBack, cancelledTransactionIds,
+  reorganizedTransactions }`. The v1 `start_scan`/`rescan` streams are unchanged:
+  both are fed from the same internal stream, with reorgs and the tip dropped.
+
 ### Changed
+
+- Upstream's offline-signing payload summary (recipients, amounts, memos, fee,
+  change), logged on every send under `c::tx::offline_signing`, is capped at Warn
+  by default and in any `LoggerConfig` that does not set that target itself.
+
+- `stop_scan` now returns only once the running scan has actually stopped (Dart
+  signature unchanged: `Future<void> stopScan()`).
+- Message signing and verification are delegated to `minotari::signing`;
+  `src/domain/signing.rs` is removed. Signature format, domain tag and error
+  strings are unchanged.
+- Bumped the `minotari-cli` git pin from `1ab7c8c` to `86503ff` (0.6.0: send-all,
+  multiple recipients, passphrase change, key restore, rescan, height-by-date, scan
+  progress with tip and reorg events) and the `tari_*` crates from `=6.2.0-pre.1`
+  to `=6.3.0-pre.1` (still exact pins). minotari now uses `utoipa-swagger-ui` 10
+  (zip 9), so the three zip advisory ignores were pruned from `deny.toml`; `rand`
+  was bumped within range to 0.8.6 / 0.9.3.
+  **Behaviour change Cake Wallet must sign off** (introduced by the `1ab7c8c` bump
+  below, still true): `send_transaction` resolves `Ok` for a send the node does not
+  accept on first broadcast (or cannot be reached for), instead of failing with
+  `Network Error: …`. The send is recorded
+  and rebroadcast by the wallet; resending it would pay twice. The frozen return
+  type cannot say so (the note is only logged); use `send_transaction_multi`,
+  whose `SendResultDto.acceptedByNode` reports it. The scan's new tip height and reorg
+  events reach Dart only through the v2 scan streams.
 
 - Bumped the `minotari-cli` git pin from `af78477` to `1ab7c8c` (tip of `main`,
   minotari 0.3.x) and the `tari_*` crates from `5.7.0-pre.8` to `=6.2.0-pre.1`, in

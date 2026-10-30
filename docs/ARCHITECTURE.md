@@ -105,10 +105,22 @@ task. Each controller carries a monotonic `id`.
   cancels + awaits the one it replaced, so a superseded scan never orphans its
   forwarder task.
 - **Tracked task.** The forwarder handle is tracked (not detached), so `stop_scan`
-  and teardown can cancel and join it.
+  and teardown can cancel and join it. `stop_scan` (and `rescan`) also wait for the
+  scan's own task to return, via the controller's `stopped` token.
 - **Safe clean-up.** A scan only clears the slot if it still holds *its own*
   controller (matched by `id`), so a scan that has already been superseded never
   clobbers its successor.
+- **Cancelled in place.** `stop_scan` and teardown cancel the controller without
+  removing it; the scan's own task clears it on exit, so every later `stop_scan`
+  and every superseding scan can still wait for it.
+- **Maintenance guard.** `abandon_send` and `change_passphrase` hold a
+  `tokio::sync::Mutex` (`MAINTENANCE`) from before they stop the scan until their DB
+  write is done. A starting scan waits on it before installing; `stop_scan` never
+  takes it. Every cancel bumps a stop generation (`STOP_GENERATION`, even when the
+  slot is empty); a starting scan that sees it change while it waited returns `Ok`
+  without installing, so a `stop_scan` or teardown during maintenance also stops a
+  scan that was still queued. The bump happens under the slot's read lock and the
+  check under its write lock at install, so a stop cannot fall between them.
 - As with the DB, the `std::sync::RwLock` guard is never held across `.await`.
 
 ### Network selection (`src/api/network.rs`)
@@ -160,9 +172,16 @@ change).
 
 ## Streaming / async contract
 
-Two functions stream progress to Dart over an FRB `StreamSink`:
-`send_transaction` (events: `SendTransactionEvent`) and `start_scan` (events:
-`ScanEventDto`). The async/stream behavior is observable and therefore frozen.
+Six functions stream progress to Dart over an FRB `StreamSink`:
+`send_transaction` and `send_transaction_multi` (events: `SendTransactionEvent`),
+`start_scan` and `rescan` (events: `ScanEventDto`), and `start_scan_v2` and
+`rescan_v2` (events: `ScanEventV2Dto`). The async/stream behavior is observable and
+therefore frozen.
+
+- **One scan stream.** All four scan functions run the same scan (`run_scan`) and
+  share the one scan slot. The scanner's events are mapped once to
+  `ScanEventV2Dto`; the v1 functions narrow that to `ScanEventDto`, dropping
+  `ReorgDetected` and `Progress.tip_height`, so their event set is unchanged.
 
 - **Ordering & backpressure (scan).** The scanner emits over an **unbounded**
   `mpsc` channel, so the producer never blocks and **no event is dropped** — events
@@ -172,16 +191,19 @@ Two functions stream progress to Dart over an FRB `StreamSink`:
   never dropped.
 - **Cancellation.** A scan ends when its `rx` closes (drains queued events first,
   including the terminal status), when the cancel token fires (`stop_scan`, a
-  superseding scan, or teardown), or when the Dart sink is closed.
+  superseding scan, or teardown), or when the Dart sink is closed. `stop_scan`
+  returns only once the scan, and any scan it replaced, has stopped.
 - **Sink-closed semantics — deliberately asymmetric:**
-  - **Scan cancels on a closed sink** — a scan with no listener has no useful work.
-  - **Send continues on a closed sink** — a half-built/half-broadcast transaction
-    must finish (aborting it could lose funds).
+  - **Scan cancels on a closed sink** (`start_scan`, `rescan` and their v2 forms) —
+    a scan with no listener has no useful work.
+  - **Send continues on a closed sink** (`send_transaction`,
+    `send_transaction_multi`) — a half-built/half-broadcast transaction must finish
+    (aborting it could lose funds).
 
   These two are intentionally different; unifying them would be an observable
   behavior break.
-- **Terminal events.** A scan failure emits exactly one `ScanEventDto::Error` and
-  then resolves to `Err`. A send resolves to the recorded, `Pending`
+- **Terminal events.** A scan failure emits exactly one `Error` event and then
+  resolves to `Err`. A send resolves to the recorded, `Pending`
   `DisplayedTransactionDto` (not necessarily accepted by the node yet; the scan's
   monitor rebroadcasts it, so callers must not resend) or an `Err` for a failure
   before the send was recorded.

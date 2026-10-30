@@ -88,6 +88,9 @@ class DisplayedTransactionDto {
   final DisplayedTransactionStatus status;
   final BigInt amount;
   final String amountDisplay;
+
+  /// Payer-controlled memo text, passed through unaltered (it can double as a
+  /// payment ID). Render it as plain, bidi-isolated text.
   final String? message;
   final CounterpartyInfoDto? counterparty;
   final BlockchainInfoDto blockchain;

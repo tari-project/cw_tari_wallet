@@ -30,6 +30,10 @@ pub(crate) const SECONDS_TO_LOCK_UTXO: u64 = 60 * 60 * 24;
 /// Default number of outputs assumed for fee estimation.
 pub(crate) const DEFAULT_NUM_OUTPUTS: usize = 1;
 
+/// Fee per gram (µT) every send is built with. The send-all quote uses it too, so the
+/// quoted amount is exactly what the send pays out.
+pub(crate) const SEND_FEE_PER_GRAM: u64 = 5;
+
 /// Response timeout (seconds) for the `check_node_health` probe. Short so a dead
 /// node fails fast.
 pub(crate) const HEALTH_TIMEOUT_SECS: u64 = 5;
@@ -71,6 +75,11 @@ mod tests {
     #[test]
     fn default_num_outputs_is_one() {
         assert_eq!(DEFAULT_NUM_OUTPUTS, 1);
+    }
+
+    #[test]
+    fn send_fee_per_gram_is_five() {
+        assert_eq!(SEND_FEE_PER_GRAM, 5);
     }
 
     #[test]

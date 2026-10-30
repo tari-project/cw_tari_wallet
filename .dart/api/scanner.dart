@@ -9,16 +9,16 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 import 'transactions.dart';
 part 'scanner.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `cancel_active_scan`, `clear_scan_if_current`, `install_scan_controller`, `map_processing_event`, `map_scan_status_event`, `run_forwarder`, `take_scan_controller`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ScanController`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
-// These functions are ignored (category: IgnoreBecauseExplicitAttribute): `start_scan_with_handler`
+// These functions are ignored because they are not marked as `pub`: `begin_maintenance`, `cancel_active_scan`, `cancel_current_scan`, `clear_scan_if_current`, `install_unless_stopped`, `map_processing_event_v2`, `map_rollback_error`, `run_forwarder`, `run_scan`, `scan_failure`, `stop_replaced_scan`, `v1_callback`, `v1_event`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `Install`, `ScanController`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`
+// These functions are ignored (category: IgnoreBecauseExplicitAttribute): `rescan_v2_with_handler`, `rescan_with_handler`, `start_scan_v2_with_handler`, `start_scan_with_handler`
 
-/// Cancel the in-flight scan, if any.
+/// Cancel the in-flight scan, if any, and wait for it to stop.
 ///
-/// Signals the current scan's cancellation token so the scan future and its event
-/// forwarder wind down. A no-op when no scan is running. Synchronous; returns once
-/// cancellation has been signalled (it does not block until the scan task exits).
+/// Signals the current scan's cancellation token and returns once the scan has
+/// actually stopped (its `start_scan` call has returned), so the wallet database is
+/// no longer being written by it. A no-op when no scan is running.
 Future<void> stopScan() => RustLib.instance.api.crateApiScannerStopScan();
 
 /// Scan the blockchain for the wallet's transactions, streaming progress.
@@ -35,6 +35,81 @@ Future<void> stopScan() => RustLib.instance.api.crateApiScannerStopScan();
 /// to `Err`.
 Stream<ScanEventDto> startScan({required ScanConfiguration config}) =>
     RustLib.instance.api.crateApiScannerStartScan(config: config);
+
+/// [`start_scan`] streaming [`ScanEventV2Dto`]s: the same scan, plus reorg events and
+/// the tip height in progress events.
+///
+/// Shares the scan slot with [`start_scan`] and [`rescan`] (latest wins, [`stop_scan`]
+/// stops whichever is running) and cancels when the Dart stream is closed.
+Stream<ScanEventV2Dto> startScanV2({required ScanConfiguration config}) =>
+    RustLib.instance.api.crateApiScannerStartScanV2(config: config);
+
+/// Roll the wallet back to `from_height` and scan again from there, streaming the
+/// same [`ScanEventDto`]s as [`start_scan`].
+///
+/// `config` is used exactly as by [`start_scan`] (its `wallet_name` selects the
+/// account, its `passphrase` must decrypt it). Any running scan is stopped, and
+/// waited for, first. The rollback is done by minotari and committed before scanning
+/// starts; if the scan then fails, the wallet stays rolled back until a later scan
+/// covers the range. A wrong passphrase errors as `Invalid Passphrase` (streamed as
+/// the terminal error event too) and changes nothing.
+/// Requires [`initialize_database`] first.
+Stream<ScanEventDto> rescan(
+        {required BigInt fromHeight, required ScanConfiguration config}) =>
+    RustLib.instance.api
+        .crateApiScannerRescan(fromHeight: fromHeight, config: config);
+
+/// [`rescan`] streaming [`ScanEventV2Dto`]s, as [`start_scan_v2`] does.
+Stream<ScanEventV2Dto> rescanV2(
+        {required BigInt fromHeight, required ScanConfiguration config}) =>
+    RustLib.instance.api
+        .crateApiScannerRescanV2(fromHeight: fromHeight, config: config);
+
+/// A blockchain reorganization the scan detected and rolled back, carried inside
+/// [`ScanEventV2Dto::ReorgDetected`].
+///
+/// Blocks from `reorg_from_height` up were rolled back and the chain is now at
+/// `new_height`. `cancelled_transaction_ids` are the wallet transactions the reorg
+/// removed; `reorganized_transactions` are those whose state changed (show them as
+/// pending again, or drop them).
+class ReorgDetectedDto {
+  final PlatformInt64 accountId;
+  final BigInt reorgFromHeight;
+  final BigInt newHeight;
+  final BigInt blocksRolledBack;
+  final List<String> cancelledTransactionIds;
+  final List<DisplayedTransactionDto> reorganizedTransactions;
+
+  const ReorgDetectedDto({
+    required this.accountId,
+    required this.reorgFromHeight,
+    required this.newHeight,
+    required this.blocksRolledBack,
+    required this.cancelledTransactionIds,
+    required this.reorganizedTransactions,
+  });
+
+  @override
+  int get hashCode =>
+      accountId.hashCode ^
+      reorgFromHeight.hashCode ^
+      newHeight.hashCode ^
+      blocksRolledBack.hashCode ^
+      cancelledTransactionIds.hashCode ^
+      reorganizedTransactions.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReorgDetectedDto &&
+          runtimeType == other.runtimeType &&
+          accountId == other.accountId &&
+          reorgFromHeight == other.reorgFromHeight &&
+          newHeight == other.newHeight &&
+          blocksRolledBack == other.blocksRolledBack &&
+          cancelledTransactionIds == other.cancelledTransactionIds &&
+          reorganizedTransactions == other.reorganizedTransactions;
+}
 
 /// Inputs to [`start_scan`].
 ///
@@ -102,6 +177,52 @@ sealed class ScanEventDto with _$ScanEventDto {
   const factory ScanEventDto.error(
     String field0,
   ) = ScanEventDto_Error;
+}
+
+@freezed
+sealed class ScanEventV2Dto with _$ScanEventV2Dto {
+  const ScanEventV2Dto._();
+
+  const factory ScanEventV2Dto.started({
+    required PlatformInt64 accountId,
+    required BigInt fromHeight,
+  }) = ScanEventV2Dto_Started;
+  const factory ScanEventV2Dto.progress({
+    required PlatformInt64 accountId,
+    required BigInt currentHeight,
+    required BigInt tipHeight,
+    required BigInt blocksScanned,
+  }) = ScanEventV2Dto_Progress;
+  const factory ScanEventV2Dto.completed({
+    required PlatformInt64 accountId,
+    required BigInt finalHeight,
+    required BigInt totalBlocksScanned,
+  }) = ScanEventV2Dto_Completed;
+  const factory ScanEventV2Dto.paused({
+    required PlatformInt64 accountId,
+    required BigInt lastScannedHeight,
+    required String reason,
+  }) = ScanEventV2Dto_Paused;
+  const factory ScanEventV2Dto.waiting({
+    required PlatformInt64 accountId,
+    required BigInt resumeInSeconds,
+  }) = ScanEventV2Dto_Waiting;
+  const factory ScanEventV2Dto.moreBlocksAvailable({
+    required PlatformInt64 accountId,
+    required BigInt lastScannedHeight,
+  }) = ScanEventV2Dto_MoreBlocksAvailable;
+  const factory ScanEventV2Dto.transactionsReady(
+    TransactionsReadyDto field0,
+  ) = ScanEventV2Dto_TransactionsReady;
+  const factory ScanEventV2Dto.transactionsUpdated(
+    TransactionsUpdatedDto field0,
+  ) = ScanEventV2Dto_TransactionsUpdated;
+  const factory ScanEventV2Dto.reorgDetected(
+    ReorgDetectedDto field0,
+  ) = ScanEventV2Dto_ReorgDetected;
+  const factory ScanEventV2Dto.error(
+    String field0,
+  ) = ScanEventV2Dto_Error;
 }
 
 @freezed

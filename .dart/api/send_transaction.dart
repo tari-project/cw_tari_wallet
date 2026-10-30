@@ -8,9 +8,45 @@ import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'transactions.dart';
 
-// These functions are ignored because they are not marked as `pub`: `build_unsigned_transaction`, `create_transaction_sender`, `map_signing_error`, `release_send_reservation`, `validate_inputs`, `verify_seed_words_match_account`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`
-// These functions are ignored (category: IgnoreBecauseExplicitAttribute): `send_transaction_with_handler`
+// These functions are ignored because they are not marked as `pub`: `build_unsigned_transaction`, `confirm_own_payload`, `create_transaction_sender`, `map_signing_error`, `release_send_reservation`, `send_with_handler`, `stored_key_manager`, `validate_inputs`, `verify_seed_words_match_account`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ValidatedInputs`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `from`, `from`
+// These functions are ignored (category: IgnoreBecauseExplicitAttribute): `send_transaction_multi_with_handler`, `send_transaction_with_handler`
+
+/// Give up a stalled send and release its inputs.
+///
+/// `transaction_id` is the send's `DisplayedTransactionDto.id`; `passphrase`
+/// (**secret**) must open wallet `wallet_name`. Delegates to minotari, which only
+/// abandons a send that is not mined and has stalled: the node refused its last
+/// rebroadcasts in a row (rebroadcasts happen while a scan runs, so keep scanning
+/// first). A mined send never stalls. A send without a change output is always
+/// refused. Returns what abandoning does not do.
+///
+/// Any running scan is stopped (and waited for) first, and a scan started meanwhile
+/// waits until the abandon is done, so no rebroadcast races it; start the scan again
+/// afterwards.
+///
+/// The original can still be mined if a node holds it. Right after an abandon,
+/// `Rejected` means "not known to be mined", not "will not be mined": do not treat it
+/// as proof until later scans from a trusted node still show it rejected. If you pay
+/// the payee again, prefer a send that spends the same inputs, so it conflicts with
+/// the original instead of paying twice. minotari selects the largest outputs first,
+/// so a same-amount resend usually picks the released inputs again.
+///
+/// Errors: `Invalid Passphrase`, `No accounts found for this wallet`,
+/// `Wallet Error: Invalid transaction id`, `Wallet Error: The send has not stalled
+/// yet; keep scanning so the wallet rebroadcasts it`, and `Wallet Error: …` with
+/// minotari's reason (unknown send, already mined, input already spent, change in use
+/// or already seen on chain, no change output). Requires [`initialize_database`]
+/// first.
+Future<String> abandonSend(
+        {required String walletName,
+        required String passphrase,
+        required String transactionId}) =>
+    RustLib.instance.api.crateApiSendTransactionAbandonSend(
+        walletName: walletName,
+        passphrase: passphrase,
+        transactionId: transactionId);
 
 /// Build, sign, and broadcast a one-sided transaction, streaming progress.
 ///
@@ -23,6 +59,9 @@ import 'transactions.dart';
 /// scan's transaction monitor rebroadcasts it, so **do not resend after `Ok`**.
 /// Rebroadcast only happens while `start_scan` runs.
 /// `Network Error` only comes from failures before the send is recorded.
+/// [`send_transaction_multi`] reports whether the node accepted it. Keep scanning so it
+/// is rebroadcast; once it has stalled, [`abandon_send`] releases its inputs (see
+/// there before paying the same payee again).
 ///
 /// Async and streamed. The send **continues even if the Dart stream is closed**
 /// (a half-broadcast transaction must finish) — this deliberately differs from
@@ -32,6 +71,149 @@ Stream<SendTransactionEvent> sendTransaction(
         {required SendTransactionDetails details}) =>
     RustLib.instance.api
         .crateApiSendTransactionSendTransaction(details: details);
+
+/// Pay several recipients in one transaction, or sweep the wallet to one recipient
+/// (`details.send_all`), streaming progress.
+///
+/// Streams the same [`SendTransactionEvent`] sequence as [`send_transaction`] and
+/// resolves to a [`SendResultDto`]: the recorded transaction plus whether the node
+/// accepted it. A send the node has not accepted yet still resolves `Ok` and is
+/// rebroadcast by the wallet while a scan runs; never resend it. Once it has stalled,
+/// [`abandon_send`] releases its inputs (see there before paying the same payee
+/// again). Each recipient gets its own output
+/// carrying its own `payment_id`. Requires [`initialize_database`] first.
+/// Like [`send_transaction`], the send continues if the Dart stream is closed.
+Stream<SendTransactionEvent> sendTransactionMulti(
+        {required MultiSendTransactionDetails details}) =>
+    RustLib.instance.api
+        .crateApiSendTransactionSendTransactionMulti(details: details);
+
+/// Inputs to [`send_transaction_multi`].
+///
+/// As [`SendTransactionDetails`], but pays every entry of `recipients` (one output
+/// each) in a single transaction. Leave `seed_words` empty to sign with the stored
+/// wallet's keys (decrypted with `passphrase`); this is how a wallet from
+/// [`import_wallet_from_keys`](crate::api::wallet::import_wallet_from_keys), which
+/// has no seed words, sends. A wrong passphrase then errors as `Invalid Passphrase`,
+/// and a view-only wallet as `Signing Error: View-only wallets cannot send`. With `send_all` set, `recipients` must hold exactly
+/// one entry and it receives every spendable output less the fee; quote that first
+/// with [`estimate_send_all_fee`](crate::api::fee::estimate_send_all_fee).
+class MultiSendTransactionDetails {
+  final List<String> seedWords;
+  final String? passphrase;
+  final TariNetwork? network;
+  final String? baseUrl;
+  final String walletName;
+  final List<SendRecipient> recipients;
+  final bool sendAll;
+  final BigInt? confirmationWindow;
+
+  const MultiSendTransactionDetails({
+    required this.seedWords,
+    this.passphrase,
+    this.network,
+    this.baseUrl,
+    required this.walletName,
+    required this.recipients,
+    required this.sendAll,
+    this.confirmationWindow,
+  });
+
+  @override
+  int get hashCode =>
+      seedWords.hashCode ^
+      passphrase.hashCode ^
+      network.hashCode ^
+      baseUrl.hashCode ^
+      walletName.hashCode ^
+      recipients.hashCode ^
+      sendAll.hashCode ^
+      confirmationWindow.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MultiSendTransactionDetails &&
+          runtimeType == other.runtimeType &&
+          seedWords == other.seedWords &&
+          passphrase == other.passphrase &&
+          network == other.network &&
+          baseUrl == other.baseUrl &&
+          walletName == other.walletName &&
+          recipients == other.recipients &&
+          sendAll == other.sendAll &&
+          confirmationWindow == other.confirmationWindow;
+}
+
+/// One payee of a [`send_transaction_multi`].
+///
+/// `address` is the recipient's base58 Tari address; `amount` is in **microTari**
+/// (ignored for a send-all); `payment_id` is an optional memo for this recipient.
+class SendRecipient {
+  final String address;
+  final BigInt amount;
+  final String? paymentId;
+
+  const SendRecipient({
+    required this.address,
+    required this.amount,
+    this.paymentId,
+  });
+
+  @override
+  int get hashCode => address.hashCode ^ amount.hashCode ^ paymentId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SendRecipient &&
+          runtimeType == other.runtimeType &&
+          address == other.address &&
+          amount == other.amount &&
+          paymentId == other.paymentId;
+}
+
+/// The outcome of a [`send_transaction_multi`].
+///
+/// `transaction` is the recorded send, pending until the scan sees it mined.
+/// `accepted_by_node` is whether the node took the first broadcast (or already had
+/// it mined). When `false` the send is still recorded and the wallet rebroadcasts it:
+/// **do not send it again**. `note` is the message to show the user in that case (or
+/// when the wallet could not record everything yet); `node_reason` is the node's
+/// answer when it did not accept the send (node-supplied text: display it as plain
+/// text). Keep scanning so the wallet rebroadcasts it; if the node keeps refusing it
+/// until it stalls, [`abandon_send`] gives it up and releases its inputs; see there
+/// before paying the same payee again.
+class SendResultDto {
+  final DisplayedTransactionDto transaction;
+  final bool acceptedByNode;
+  final String? note;
+  final String? nodeReason;
+
+  const SendResultDto({
+    required this.transaction,
+    required this.acceptedByNode,
+    this.note,
+    this.nodeReason,
+  });
+
+  @override
+  int get hashCode =>
+      transaction.hashCode ^
+      acceptedByNode.hashCode ^
+      note.hashCode ^
+      nodeReason.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SendResultDto &&
+          runtimeType == other.runtimeType &&
+          transaction == other.transaction &&
+          acceptedByNode == other.acceptedByNode &&
+          note == other.note &&
+          nodeReason == other.nodeReason;
+}
 
 /// Inputs to [`send_transaction`].
 ///

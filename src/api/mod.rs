@@ -5,6 +5,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod fee;
+pub mod height;
 pub mod logger;
 pub mod network;
 pub mod scanner;

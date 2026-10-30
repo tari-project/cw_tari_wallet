@@ -9,6 +9,11 @@ use std::path::PathBuf;
 
 const BYTES_PER_MB: u64 = 1_048_576;
 
+/// Upstream logs every offline-signing payload summary (recipients, amounts, memos,
+/// fee, change) at Info under this target when a send is signed. Capped at Warn
+/// unless the caller sets a level for it explicitly.
+const PAYLOAD_SUMMARY_TARGET: &str = "c::tx::offline_signing";
+
 /// Logging verbosity, from `Error` (least) to `Trace` (most), or `Off`.
 #[frb]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +80,10 @@ impl Default for LoggerConfig {
                     target: "h2".to_string(),
                     level: LogLevel::Error,
                 },
+                LogModuleConfig {
+                    target: PAYLOAD_SUMMARY_TARGET.to_string(),
+                    level: LogLevel::Warn,
+                },
             ],
         }
     }
@@ -140,7 +149,7 @@ pub fn init_logger(base_path: String, config: Option<LoggerConfig>) -> Result<()
         .chain(Box::new(log_writer) as Box<dyn std::io::Write + Send>)
         .chain(std::io::stdout());
 
-    for module in config.module_levels {
+    for module in with_payload_summary_cap(config.module_levels) {
         dispatch = dispatch.level_for(module.target, module.level.into());
     }
 
@@ -163,6 +172,17 @@ pub fn init_logger(base_path: String, config: Option<LoggerConfig>) -> Result<()
     Ok(())
 }
 
+/// Add the Warn cap for [`PAYLOAD_SUMMARY_TARGET`] unless `levels` already sets it.
+fn with_payload_summary_cap(mut levels: Vec<LogModuleConfig>) -> Vec<LogModuleConfig> {
+    if !levels.iter().any(|m| m.target == PAYLOAD_SUMMARY_TARGET) {
+        levels.push(LogModuleConfig {
+            target: PAYLOAD_SUMMARY_TARGET.to_string(),
+            level: LogLevel::Warn,
+        });
+    }
+    levels
+}
+
 #[cfg(test)]
 mod tests {
     //! Enum-mapping tests. Pure conversions, no I/O. These are upstream-drift
@@ -179,5 +199,34 @@ mod tests {
         assert_eq!(LevelFilter::from(LogLevel::Debug), LevelFilter::Debug);
         assert_eq!(LevelFilter::from(LogLevel::Trace), LevelFilter::Trace);
         assert_eq!(LevelFilter::from(LogLevel::Off), LevelFilter::Off);
+    }
+
+    fn payload_summary_level(levels: &[LogModuleConfig]) -> Option<LogLevel> {
+        levels
+            .iter()
+            .find(|m| m.target == "c::tx::offline_signing")
+            .map(|m| m.level)
+    }
+
+    #[test]
+    fn payload_summaries_are_capped_at_warn() {
+        // The default config caps the target.
+        let default = LoggerConfig::default().module_levels;
+        assert_eq!(payload_summary_level(&default), Some(LogLevel::Warn));
+
+        // A caller config without it gets the cap added.
+        let custom = with_payload_summary_cap(vec![LogModuleConfig {
+            target: "minotari".to_string(),
+            level: LogLevel::Debug,
+        }]);
+        assert_eq!(payload_summary_level(&custom), Some(LogLevel::Warn));
+
+        // An explicit caller choice is kept.
+        let explicit = with_payload_summary_cap(vec![LogModuleConfig {
+            target: "c::tx::offline_signing".to_string(),
+            level: LogLevel::Info,
+        }]);
+        assert_eq!(explicit.len(), 1);
+        assert_eq!(payload_summary_level(&explicit), Some(LogLevel::Info));
     }
 }
