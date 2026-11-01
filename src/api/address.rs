@@ -6,6 +6,7 @@ use crate::api::{
 use anyhow::Result;
 use flutter_rust_bridge::frb;
 use minotari_wallet::get_accounts;
+use zeroize::Zeroizing;
 
 /// Return the base58 Tari address of the wallet account named `wallet_name`.
 ///
@@ -19,12 +20,13 @@ pub fn get_address(
     passphrase: Option<String>,
     network: Option<TariNetwork>,
 ) -> Result<String> {
+    let passphrase = passphrase.map(Zeroizing::new);
     let network = parse_network(network);
     apply_network(network)?;
     let mut conn = get_db_connection()?;
     let accounts = &get_accounts(&mut conn, Some(&wallet_name))?;
     let account = accounts.first().ok_or(WalletError::NoAccounts)?;
-    let address = account.get_address(network, passphrase.as_deref().unwrap_or(""))?;
+    let address = account.get_address(network, passphrase.as_deref().map_or("", String::as_str))?;
 
     Ok(address.to_base58())
 }

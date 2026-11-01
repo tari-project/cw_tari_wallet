@@ -474,10 +474,9 @@ fn release_send_reservation(pending_transaction_id: &str) {
 /// Check that `key_manager` (derived from the caller's seed words) controls the same
 /// wallet as the stored account.
 ///
-/// Compares public **view keys**, which is exactly the equality
-/// `sign_locked_transaction`'s payload-signature check enforces later, so this accepts
-/// precisely the inputs signing would accept — it cannot reject a send that would have
-/// worked.
+/// Compares both public **view** and **spend** keys against the stored wallet so a
+/// view-only or key-imported wallet whose spend key does not match the seed words is
+/// rejected before any UTXO is reserved.
 fn verify_seed_words_match_account(
     wallet_name: &str,
     passphrase: &str,
@@ -487,16 +486,20 @@ fn verify_seed_words_match_account(
     let accounts = get_accounts(&conn, Some(wallet_name))?;
     let account = accounts.first().ok_or(WalletError::NoAccounts)?;
 
-    let stored_view_key = account
+    let stored_wallet = account
         .decrypt_wallet_type(passphrase)
-        .map_err(|e| WalletError::wallet(e.to_string()))?
-        .get_public_view_key();
+        .map_err(|e| WalletError::wallet(e.to_string()))?;
 
-    if key_manager.get_view_key().pub_key != stored_view_key {
+    if !keys_match_stored_wallet(key_manager, &stored_wallet) {
         return Err(WalletError::signing(SEED_WORDS_ACCOUNT_MISMATCH).into());
     }
 
     Ok(())
+}
+
+fn keys_match_stored_wallet(key_manager: &KeyManager, stored_wallet: &WalletType) -> bool {
+    key_manager.get_view_key().pub_key == stored_wallet.get_public_view_key()
+        && key_manager.get_spend_key().pub_key == stored_wallet.get_public_spend_key()
 }
 
 /// The stored wallet's own key manager, for a send without seed words.
@@ -609,8 +612,14 @@ fn validate_inputs(details: &MultiSendTransactionDetails) -> Result<ValidatedInp
     validate_recipient_count(details.recipients.len(), details.send_all)?;
 
     let mut recipients = Vec::with_capacity(details.recipients.len());
+    let mut total_amount = 0u64;
     for r in &details.recipients {
         let address = validate_recipient(network, &r.address, r.amount, details.send_all)?;
+        if !details.send_all {
+            total_amount = total_amount
+                .checked_add(r.amount)
+                .ok_or_else(|| WalletError::wallet("Total recipient amount overflow"))?;
+        }
         recipients.push(Recipient {
             address,
             amount: MicroMinotari(r.amount),
@@ -1186,5 +1195,53 @@ mod tests {
             err.to_string(),
             "Wallet Error: At least one recipient is required"
         );
+    }
+
+    #[test]
+    fn rejects_multi_recipient_amount_overflow() {
+        let good = deterministic_recipient_base58(Network::MainNet);
+        let mut details = details_with(good.clone(), u64::MAX, None);
+        details.recipients.push(SendRecipient {
+            address: good,
+            amount: 1,
+            payment_id: None,
+        });
+        let Err(err) = validate_inputs(&details) else {
+            panic!("multi-recipient total amount overflow must be rejected");
+        };
+        assert_eq!(
+            err.to_string(),
+            "Wallet Error: Total recipient amount overflow"
+        );
+    }
+
+    #[test]
+    fn keys_match_stored_wallet_requires_both_view_and_spend_keys_to_match() {
+        use tari_common_types::seeds::cipher_seed::CipherSeed;
+        use tari_transaction_components::key_manager::wallet_types::{
+            SeedWordsWallet, ViewWallet, WalletType,
+        };
+
+        let seed = CipherSeed::random();
+        let seed_wallet = SeedWordsWallet::construct_new(seed).unwrap();
+        let full_wallet = WalletType::SeedWords(seed_wallet.clone());
+        let key_manager = KeyManager::new(full_wallet.clone()).unwrap();
+
+        assert!(keys_match_stored_wallet(&key_manager, &full_wallet));
+
+        // Same view key, different public spend key -> must be rejected
+        let mut other_spend_bytes = [0u8; 32];
+        other_spend_bytes[0] = 19;
+        let other_spend_sk = RistrettoSecretKey::from_canonical_bytes(&other_spend_bytes).unwrap();
+        let other_spend_pk = CompressedPublicKey::from_secret_key(&other_spend_sk);
+        let mismatched_spend_wallet = WalletType::ViewWallet(ViewWallet::new(
+            other_spend_pk,
+            seed_wallet.view_key().clone(),
+            None,
+        ));
+        assert!(!keys_match_stored_wallet(
+            &key_manager,
+            &mismatched_spend_wallet
+        ));
     }
 }

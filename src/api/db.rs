@@ -50,6 +50,7 @@ impl Database {
     /// Open the pool at `path` and install it as the current database, replacing
     /// any previously installed one.
     fn init(path: PathBuf) -> Result<()> {
+        crate::api::scanner::cancel_active_scan()?;
         let pool = init_db(path.clone()).context("Failed to create database pool")?;
 
         match pool.get() {
