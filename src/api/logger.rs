@@ -120,7 +120,6 @@ pub fn init_logger(base_path: String, config: Option<LoggerConfig>) -> Result<()
         AppendCount::new(config.max_files),
         file_rotate::ContentLimit::Bytes((config.max_file_size_mb * BYTES_PER_MB) as usize),
         Compression::None,
-        #[cfg(unix)]
         None,
     );
     let log_writer = LineWriter::new(file_rotator);

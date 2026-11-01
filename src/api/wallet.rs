@@ -132,6 +132,7 @@ pub fn import_view_only_wallet(
     network: Option<TariNetwork>,
 ) -> Result<WalletCreationDetails> {
     let password = Zeroizing::new(passphrase);
+    let view_private_key_hex = Zeroizing::new(view_private_key_hex);
     let network = parse_network(network);
     apply_network(network)?;
 
