@@ -58,7 +58,10 @@ impl From<ChainMetadata> for TipInfo {
 /// HTTP RPC. Shared by [`get_tip_info`] and [`is_node_synced`] so the
 /// parse → connect → fetch sequence (and its error strings) live in one place.
 async fn fetch_tip_info(base_url: String) -> Result<TipInfoResponse> {
-    let base_url = base_url.parse().context("Failed to parse base URL")?;
+    let base_url = base_url
+        .trim()
+        .parse()
+        .context("Failed to parse base URL")?;
     let wallet_client = WalletHttpClient::new(base_url)?;
     wallet_client.get_tip_info().await
 }
@@ -100,7 +103,7 @@ pub async fn is_node_synced(base_url: String) -> Result<bool> {
 /// connection" UX. Part of the frozen public contract (ledger D2) even though it
 /// has no explicit `#[frb]`.
 pub async fn check_node_health(base_url: String) -> Result<bool> {
-    let url = match base_url.parse() {
+    let url = match base_url.trim().parse() {
         Ok(url) => url,
         // Bad URL is "not healthy", not an error: keep the Dart mapping a plain bool.
         Err(_) => return Ok(false),

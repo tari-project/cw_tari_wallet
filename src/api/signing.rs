@@ -17,9 +17,9 @@ use tari_common_types::tari_address::TariAddress;
 /// well-formed-but-wrong signature; errors only on malformed input (bad address,
 /// wrong signature format, or undecodable hex components).
 pub fn verify_message(message: String, signature: String, address: String) -> Result<bool> {
-    let addr = TariAddress::from_base58(&address)
+    let addr = TariAddress::from_base58(address.trim())
         .map_err(|e| WalletError::invalid_address(e.to_string()))?;
-    minotari_wallet::verify_message(&addr, &message, &signature)
+    minotari_wallet::verify_message(&addr, &message, signature.trim())
         .map_err(|e| map_signing_error(e).into())
 }
 

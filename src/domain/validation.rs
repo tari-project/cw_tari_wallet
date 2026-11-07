@@ -24,7 +24,7 @@ pub(crate) fn validate_recipient(
     amount: u64,
     send_all: bool,
 ) -> Result<TariAddress, WalletError> {
-    let address = TariAddress::from_base58(address)
+    let address = TariAddress::from_base58(address.trim())
         .map_err(|e| WalletError::invalid_address(e.to_string()))?;
 
     if address.network() != network {
