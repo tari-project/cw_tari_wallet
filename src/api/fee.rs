@@ -74,6 +74,9 @@ pub async fn estimate_transaction_fee_for_outputs(
     base_url: String,
     wallet_name: String,
 ) -> Result<FeeEstimate> {
+    if num_outputs == 0 {
+        return Err(WalletError::wallet("At least one recipient is required").into());
+    }
     let num_outputs = usize::try_from(num_outputs)
         .map_err(|_| WalletError::wallet("Too many outputs to estimate a fee for"))?;
     estimate_fee(amount, num_outputs, priority, base_url, wallet_name).await
@@ -86,6 +89,9 @@ async fn estimate_fee(
     base_url: String,
     wallet_name: String,
 ) -> Result<FeeEstimate> {
+    if amount == 0 {
+        return Err(WalletError::wallet("Amount must be greater than zero").into());
+    }
     let pool = get_db_pool()?;
 
     let estimator = FeeEstimator::new(pool, base_url);
@@ -200,6 +206,36 @@ mod tests {
         assert_eq!(
             LibFeePriority::from(FeePriority::Fast),
             LibFeePriority::Fast
+        );
+    }
+
+    #[tokio::test]
+    async fn estimate_fee_rejects_zero_amount_and_zero_outputs_before_db() {
+        let err = estimate_transaction_fee(
+            0,
+            FeePriority::Medium,
+            "http://127.0.0.1:1".into(),
+            "w".into(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Wallet Error: Amount must be greater than zero"
+        );
+
+        let err = estimate_transaction_fee_for_outputs(
+            1_000,
+            0,
+            FeePriority::Medium,
+            "http://127.0.0.1:1".into(),
+            "w".into(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Wallet Error: At least one recipient is required"
         );
     }
 }

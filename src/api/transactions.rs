@@ -186,6 +186,12 @@ pub fn get_transactions(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<DisplayedTransactionDto>> {
+    if limit < 0 || offset < 0 {
+        return Err(WalletError::wallet("Pagination limit and offset must be non-negative").into());
+    }
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
     let mut conn = get_db_connection()?;
     let accounts = &get_accounts(&mut conn, Some(&wallet_name))?;
     let account = accounts.first().ok_or(WalletError::NoAccounts)?;
@@ -272,5 +278,20 @@ mod tests {
             DisplayedTransactionStatus::from(TransactionDisplayStatus::Locked),
             DisplayedTransactionStatus::Locked
         ));
+    }
+
+    #[test]
+    fn get_transactions_validates_negative_and_zero_pagination() {
+        let err = get_transactions("w".into(), -1, 0).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Wallet Error: Pagination limit and offset must be non-negative"
+        );
+        let err = get_transactions("w".into(), 10, -5).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Wallet Error: Pagination limit and offset must be non-negative"
+        );
+        assert!(get_transactions("w".into(), 0, 0).unwrap().is_empty());
     }
 }
