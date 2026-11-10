@@ -133,6 +133,10 @@ pub enum WalletError {
     /// is running.
     #[error("A foreground scan of this wallet is already running")]
     ForegroundScanActive,
+
+    /// A send or send-all quote was asked for at a fee per gram of 0 or above the cap.
+    #[error("Invalid fee per gram: {value} (must be 1 to {max} microTari per gram)")]
+    InvalidFeePerGram { value: u64, max: u64 },
 }
 
 impl WalletError {
@@ -272,6 +276,10 @@ mod tests {
         assert_eq!(
             WalletError::ForegroundScanActive.to_string(),
             "A foreground scan of this wallet is already running"
+        );
+        assert_eq!(
+            WalletError::InvalidFeePerGram { value: 0, max: 100 }.to_string(),
+            "Invalid fee per gram: 0 (must be 1 to 100 microTari per gram)"
         );
         assert_eq!(
             WalletError::internal("Failed to init wallet").to_string(),

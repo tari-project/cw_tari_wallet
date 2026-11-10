@@ -53,6 +53,17 @@ pub(crate) fn validate_recipient_count(count: usize, send_all: bool) -> Result<(
     Ok(())
 }
 
+/// Reject a fee per gram of 0 or above `max`.
+pub(crate) fn validate_fee_per_gram(fee_per_gram: u64, max: u64) -> Result<(), WalletError> {
+    if fee_per_gram == 0 || fee_per_gram > max {
+        return Err(WalletError::InvalidFeePerGram {
+            value: fee_per_gram,
+            max,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     //! Pure validation tests, re-homed from `send_transaction.rs`. They
@@ -155,5 +166,23 @@ mod tests {
             many.to_string(),
             "Wallet Error: A send-all pays exactly one recipient"
         );
+    }
+
+    #[test]
+    fn fee_per_gram_must_be_from_one_to_the_cap() {
+        use crate::api::config::{MAX_FEE_PER_GRAM, SEND_FEE_PER_GRAM};
+        for ok in [1, SEND_FEE_PER_GRAM, MAX_FEE_PER_GRAM] {
+            assert!(validate_fee_per_gram(ok, MAX_FEE_PER_GRAM).is_ok(), "{ok}");
+        }
+        for bad in [0, MAX_FEE_PER_GRAM + 1, u64::MAX] {
+            assert!(
+                matches!(
+                    validate_fee_per_gram(bad, MAX_FEE_PER_GRAM),
+                    Err(WalletError::InvalidFeePerGram { value, max })
+                        if value == bad && max == MAX_FEE_PER_GRAM
+                ),
+                "{bad}"
+            );
+        }
     }
 }

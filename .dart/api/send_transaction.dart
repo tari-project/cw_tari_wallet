@@ -11,7 +11,7 @@ import 'transactions.dart';
 // These functions are ignored because they are not marked as `pub`: `build_unsigned_transaction`, `build_while_unlocked`, `confirm_own_payload`, `create_transaction_sender`, `map_signing_error`, `release_send_reservation`, `same_account`, `stored_key_manager`, `unlocked_in`, `validate_inputs`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ValidatedInputs`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `from`
-// These functions are ignored (category: IgnoreBecauseExplicitAttribute): `send_transaction_with_handler`
+// These functions are ignored (category: IgnoreBecauseExplicitAttribute): `send_transaction_at_fee_with_handler`, `send_transaction_with_handler`
 
 /// Give up a stalled send and release its inputs.
 ///
@@ -72,6 +72,20 @@ Stream<SendTransactionEvent> sendTransaction(
         {required MultiSendTransactionDetails details}) =>
     RustLib.instance.api
         .crateApiSendTransactionSendTransaction(details: details);
+
+/// [`send_transaction`] built at `fee_per_gram` (µT per gram) instead of the default
+/// rate: pass the `fee_per_gram` of the
+/// [`FeeEstimate`](crate::api::fee::FeeEstimate) the user confirmed, or for a send-all
+/// the rate given to
+/// [`estimate_send_all_fee_at`](crate::api::fee::estimate_send_all_fee_at), so the
+/// quote and the send match. A rate of 0 or above the cap errors with
+/// `Invalid fee per gram: …` before any UTXO is reserved. Otherwise as
+/// [`send_transaction`], including that a closed sink does not abort the send.
+Stream<SendTransactionEvent> sendTransactionAtFee(
+        {required MultiSendTransactionDetails details,
+        required BigInt feePerGram}) =>
+    RustLib.instance.api.crateApiSendTransactionSendTransactionAtFee(
+        details: details, feePerGram: feePerGram);
 
 /// Inputs to [`send_transaction`].
 ///

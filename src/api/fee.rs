@@ -1,10 +1,11 @@
 use crate::api::config::{
-    DEFAULT_BASE_URL, DEFAULT_CONFIRMATION_WINDOW, DEFAULT_NUM_OUTPUTS, SEND_FEE_PER_GRAM,
+    DEFAULT_BASE_URL, DEFAULT_CONFIRMATION_WINDOW, DEFAULT_NUM_OUTPUTS, MAX_FEE_PER_GRAM,
+    SEND_FEE_PER_GRAM,
 };
 use crate::api::db::get_db_pool;
 use crate::api::error::WalletError;
 use crate::api::network::{parse_network, TariNetwork};
-use crate::domain::validation::validate_recipient;
+use crate::domain::validation::{validate_fee_per_gram, validate_recipient};
 use anyhow::{Context, Result};
 use flutter_rust_bridge::frb;
 use minotari_wallet::transactions::fee_estimator::{FeeEstimator, FeePriority as LibFeePriority};
@@ -33,7 +34,9 @@ impl From<FeePriority> for LibFeePriority {
 /// A fee estimate for a prospective send.
 ///
 /// `estimated_fee` and `total_amount_required` (amount + fee) are in **microTari**;
-/// `fee_per_gram` is the rate in microTari per gram of transaction weight;
+/// `fee_per_gram` is the rate in microTari per gram of transaction weight (the node's
+/// rate, capped at the most a send accepts, so it can be passed to
+/// [`send_transaction_at_fee`](crate::api::send_transaction::send_transaction_at_fee));
 /// `input_count` is how many UTXOs would be spent.
 #[frb]
 #[derive(Debug, Clone)]
@@ -112,12 +115,33 @@ async fn estimate_fee(
             WalletError::internal("Could not find fee estimate for requested priority")
         })?;
 
+    let (fee_per_gram, estimated_fee) = cap_rate(
+        selected_estimate.fee_per_gram.0,
+        selected_estimate.estimated_fee.0,
+        MAX_FEE_PER_GRAM,
+    )
+    .ok_or_else(|| WalletError::internal("Failed to estimate fees"))?;
+
     Ok(FeeEstimate {
-        estimated_fee: selected_estimate.estimated_fee.0,
-        total_amount_required: selected_estimate.total_amount_required.0,
-        fee_per_gram: selected_estimate.fee_per_gram.0,
+        estimated_fee,
+        // minotari checked `amount + fee` at the node's rate; a capped fee is smaller.
+        total_amount_required: amount.saturating_add(estimated_fee),
+        fee_per_gram,
         input_count: selected_estimate.input_count,
     })
+}
+
+/// The node's `fee_per_gram` capped at `max`, with `fee` rescaled to it, as
+/// `(fee_per_gram, fee)`. `None` if `fee` saturated, as its weight is then unknown.
+fn cap_rate(fee_per_gram: u64, fee: u64, max: u64) -> Option<(u64, u64)> {
+    if fee_per_gram <= max {
+        return Some((fee_per_gram, fee));
+    }
+    // minotari's fee is weight * rate (saturating), so the weight divides out exactly.
+    if fee == u64::MAX || !fee.is_multiple_of(fee_per_gram) {
+        return None;
+    }
+    Some((max, fee / fee_per_gram * max))
 }
 
 /// What a send-all would cost and pay, from [`estimate_send_all_fee`].
@@ -141,7 +165,7 @@ pub struct SendAllFeeEstimate {
 /// Computed by minotari exactly as the send-all in
 /// [`send_transaction`](crate::api::send_transaction::send_transaction)
 /// computes it, at the same fee per gram, so `amount_after_fee` is what that send
-/// pays. `payment_id` changes the output size and so the fee; pass the one the send
+/// pays. To send at another rate, quote with [`estimate_send_all_fee_at`]. `payment_id` changes the output size and so the fee; pass the one the send
 /// will use, and the same `confirmation_window` (`None` → 3, as for the send).
 /// Offline: reads only the wallet database. `network` as elsewhere (`None` → MainNet). Errors if the address is invalid or the wallet's spendable
 /// balance would leave the recipient only dust. Requires
@@ -154,6 +178,30 @@ pub fn estimate_send_all_fee(
     network: Option<TariNetwork>,
     confirmation_window: Option<u64>,
 ) -> Result<SendAllFeeEstimate> {
+    estimate_send_all_fee_at(
+        wallet_name,
+        recipient_address,
+        payment_id,
+        network,
+        confirmation_window,
+        SEND_FEE_PER_GRAM,
+    )
+}
+
+/// [`estimate_send_all_fee`] at `fee_per_gram` (µT per gram), quoting the send-all of
+/// [`send_transaction_at_fee`](crate::api::send_transaction::send_transaction_at_fee)
+/// at the same rate. Errors with `Invalid fee per gram: …` for a rate of 0 or above the
+/// cap, before the wallet is read.
+#[frb]
+pub fn estimate_send_all_fee_at(
+    wallet_name: String,
+    recipient_address: String,
+    payment_id: Option<String>,
+    network: Option<TariNetwork>,
+    confirmation_window: Option<u64>,
+    fee_per_gram: u64,
+) -> Result<SendAllFeeEstimate> {
+    validate_fee_per_gram(fee_per_gram, MAX_FEE_PER_GRAM)?;
     let network = parse_network(network);
     let address = validate_recipient(network, &recipient_address, 0, true)?;
 
@@ -165,7 +213,7 @@ pub fn estimate_send_all_fee(
             network,
             &address,
             payment_id.as_deref(),
-            MicroMinotari(SEND_FEE_PER_GRAM),
+            MicroMinotari(fee_per_gram),
             confirmation_window.unwrap_or(DEFAULT_CONFIRMATION_WINDOW),
         )
         .map_err(|e| WalletError::wallet(e.to_string()))?;
@@ -201,5 +249,18 @@ mod tests {
             LibFeePriority::from(FeePriority::Fast),
             LibFeePriority::Fast
         );
+    }
+
+    #[test]
+    fn node_rates_are_capped_with_the_fee_rescaled() {
+        // At or under the cap: unchanged.
+        assert_eq!(cap_rate(5, 5_000, 100), Some((5, 5_000)));
+        assert_eq!(cap_rate(100, 100_000, 100), Some((100, 100_000)));
+        // Above it: weight 1_000 at the cap.
+        assert_eq!(cap_rate(101, 101_000, 100), Some((100, 100_000)));
+        assert_eq!(cap_rate(5_000, 5_000_000, 100), Some((100, 100_000)));
+        // A saturated fee has no recoverable weight.
+        assert_eq!(cap_rate(u64::MAX, u64::MAX, 100), None);
+        assert_eq!(cap_rate(1_000, 1_001, 100), None);
     }
 }

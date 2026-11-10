@@ -36,6 +36,13 @@ diff) before the version is tagged.
 
 ## [Unreleased]
 
+### Added (additive, SPEC-20)
+- `send_transaction_at_fee(sink, details, fee_per_gram)`: `send_transaction` built at
+  the given rate (µT per gram) instead of the fixed 5.
+- `estimate_send_all_fee_at(…, fee_per_gram)`: the send-all quote at that rate.
+- Both refuse a rate of 0 or above 100 µT/gram, before any UTXO is reserved, with the
+  new error `Invalid fee per gram: <rate> (must be 1 to 100 microTari per gram)`.
+
 ### Changed
 
 - The crate and its native library are renamed from `rust_lib_flutter_rust_wallet`
@@ -46,6 +53,8 @@ diff) before the version is tagged.
 - Bumped `minotari-wallet-core` to minotari-cli `80e8ac9` (the merge of tari-project/minotari-cli#179)
   and the `tari_*` crates to `=6.3.0-pre.4` (`tari_sidechain` 9.0). No change to
   the bridge.
+- Fee estimates cap the node's fee per gram at 100 µT/gram (fee rescaled to match), so
+  an estimate's `fee_per_gram` is always a rate `send_transaction_at_fee` accepts.
 
 ### Security
 

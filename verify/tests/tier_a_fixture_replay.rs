@@ -24,7 +24,8 @@ use minotari_wallet_ffi::api::address::get_address;
 use minotari_wallet_ffi::api::balance::get_balance;
 use minotari_wallet_ffi::api::db::{lock_wallet, set_database_path, unlock_wallet};
 use minotari_wallet_ffi::api::fee::{
-    estimate_send_all_fee, estimate_transaction_fee_for_outputs, FeePriority,
+    estimate_send_all_fee, estimate_send_all_fee_at, estimate_transaction_fee_for_outputs,
+    FeePriority,
 };
 use minotari_wallet_ffi::api::network::current_network;
 use minotari_wallet_ffi::api::network::TariNetwork;
@@ -33,8 +34,8 @@ use minotari_wallet_ffi::api::scanner::{
     ScanEventDto, ScanPriority,
 };
 use minotari_wallet_ffi::api::send_transaction::{
-    abandon_send, send_transaction_with_handler, MultiSendTransactionDetails, SendRecipient,
-    TransactionStage,
+    abandon_send, send_transaction_at_fee_with_handler, send_transaction_with_handler,
+    MultiSendTransactionDetails, SendRecipient, TransactionStage,
 };
 use minotari_wallet_ffi::api::signing::{sign_message, verify_message};
 use minotari_wallet_ffi::api::transactions::get_transactions;
@@ -716,6 +717,44 @@ fn fee_for_more_outputs_is_higher() {
     assert_eq!(three.total_amount_required, 1_000_000 + three.estimated_fee);
 }
 
+/// A node quoting above the cap is quoted at the cap, as if the node had said the cap.
+#[test]
+fn node_fee_rates_are_capped() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _funded = with_funded_wallet();
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let estimate_with_node_rate = |rate: u64| {
+        runtime.block_on(async {
+            let server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/get_mempool_fee_per_gram_stats"))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({ "stats": [
+                        { "order": 0, "min_fee_per_gram": rate, "avg_fee_per_gram": rate, "max_fee_per_gram": rate },
+                    ] }),
+                ))
+                .mount(&server)
+                .await;
+            estimate_transaction_fee_for_outputs(
+                1_000_000,
+                1,
+                FeePriority::Fast,
+                server.uri(),
+                FUNDED.to_string(),
+            )
+            .await
+            .expect("estimate")
+        })
+    };
+    let at_cap = estimate_with_node_rate(100);
+    assert_eq!(at_cap.fee_per_gram, 100);
+    let over = estimate_with_node_rate(5_000);
+    assert_eq!(over.fee_per_gram, 100);
+    assert_eq!(over.estimated_fee, at_cap.estimated_fee);
+    assert_eq!(over.total_amount_required, 1_000_000 + at_cap.estimated_fee);
+}
+
 #[test]
 fn send_transaction_pays_every_recipient() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
@@ -807,6 +846,116 @@ fn send_all_sweeps_the_quoted_amount() {
     );
     let balance = get_balance(FUNDED.to_string()).expect("balance");
     assert_eq!(balance.available, 0, "every output is spent");
+}
+
+/// A send-all at a chosen rate pays exactly its quote at that rate, which scales with
+/// the rate (same inputs and outputs, so the same weight).
+#[test]
+fn send_all_at_a_rate_sweeps_the_quoted_amount() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let quote = |fee_per_gram| {
+        estimate_send_all_fee_at(
+            FUNDED.to_string(),
+            funded.recipient.clone(),
+            None,
+            Some(TariNetwork::Esmeralda),
+            None,
+            fee_per_gram,
+        )
+        .expect("estimate_send_all_fee_at")
+    };
+    let default = estimate_send_all_fee(
+        FUNDED.to_string(),
+        funded.recipient.clone(),
+        None,
+        Some(TariNetwork::Esmeralda),
+        None,
+    )
+    .expect("estimate_send_all_fee");
+    assert_eq!(quote(5).fee, default.fee, "the default rate is 5");
+    let estimate = quote(20);
+    assert_eq!(estimate.fee, 4 * default.fee);
+    assert_eq!(estimate.input_count, 3);
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let (sent, kernel_fee) = runtime.block_on(async {
+        let server = wiremock::MockServer::start().await;
+        let details = funded_send(
+            &funded,
+            vec![SendRecipient {
+                address: funded.recipient.clone(),
+                amount: 0,
+                payment_id: None,
+            }],
+            true,
+            server.uri(),
+        );
+        let sent = send_transaction_at_fee_with_handler(details, 20, |_| {}).await;
+        (sent, broadcast_kernel_fee(&server).await)
+    });
+    let sent = sent.expect("send-all at 20").transaction;
+
+    assert_eq!(kernel_fee, estimate.fee, "built at 20");
+    assert_eq!(sent.amount, estimate.amount_after_fee + estimate.fee);
+    let balance = get_balance(FUNDED.to_string()).expect("balance");
+    assert_eq!(balance.available, 0, "every output is spent");
+}
+
+/// The fee in the kernel of the transaction broadcast to the mock node.
+async fn broadcast_kernel_fee(server: &wiremock::MockServer) -> u64 {
+    let requests = server.received_requests().await.expect("recorded requests");
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests.first().expect("a broadcast").body).expect("json");
+    body["params"]["transaction"]["body"]["kernels"][0]["fee"]
+        .as_u64()
+        .expect("kernel fee")
+}
+
+/// A rate of 0 or above the cap is refused before any UTXO is reserved, by the send
+/// and by the send-all quote.
+#[test]
+fn an_out_of_range_rate_is_refused_without_locking_anything() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    for (rate, message) in [
+        (
+            0,
+            "Invalid fee per gram: 0 (must be 1 to 100 microTari per gram)",
+        ),
+        (
+            101,
+            "Invalid fee per gram: 101 (must be 1 to 100 microTari per gram)",
+        ),
+    ] {
+        let details = funded_send(
+            &funded,
+            vec![SendRecipient {
+                address: funded.recipient.clone(),
+                amount: 1_000,
+                payment_id: None,
+            }],
+            false,
+            "http://127.0.0.1:1".to_string(),
+        );
+        let err = runtime
+            .block_on(send_transaction_at_fee_with_handler(details, rate, |_| {}))
+            .expect_err("refused rate");
+        assert_eq!(err.to_string(), message);
+        let err = estimate_send_all_fee_at(
+            FUNDED.to_string(),
+            funded.recipient.clone(),
+            None,
+            Some(TariNetwork::Esmeralda),
+            None,
+            rate,
+        )
+        .expect_err("refused rate");
+        assert_eq!(err.to_string(), message);
+    }
+    let balance = get_balance(FUNDED.to_string()).expect("balance");
+    assert_eq!(balance.locked, 0, "nothing reserved");
 }
 
 /// A key-imported wallet has no seed words: once unlocked it sends with its stored

@@ -30,6 +30,11 @@ pub(crate) const DEFAULT_NUM_OUTPUTS: usize = 1;
 /// quoted amount is exactly what the send pays out.
 pub(crate) const SEND_FEE_PER_GRAM: u64 = 5;
 
+/// Highest fee per gram (µT) a send may be built at, and the most a fee estimate
+/// reports. 20x the default rate and 10x minotari's own Fast fallback (10 µT/gram), so a
+/// bad node quote or a caller bug cannot burn more than a small multiple of a normal fee.
+pub(crate) const MAX_FEE_PER_GRAM: u64 = 100;
+
 /// Response timeout (seconds) for the `check_node_health` probe. Short so a dead
 /// node fails fast.
 pub(crate) const HEALTH_TIMEOUT_SECS: u64 = 5;
@@ -84,6 +89,11 @@ mod tests {
     #[test]
     fn send_fee_per_gram_is_five() {
         assert_eq!(SEND_FEE_PER_GRAM, 5);
+    }
+
+    #[test]
+    fn max_fee_per_gram_is_one_hundred() {
+        assert_eq!(MAX_FEE_PER_GRAM, 100);
     }
 
     #[test]

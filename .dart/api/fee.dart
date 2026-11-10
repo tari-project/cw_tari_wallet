@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `estimate_fee`
+// These functions are ignored because they are not marked as `pub`: `cap_rate`, `estimate_fee`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `from`
 
 /// Estimate the fee to send `amount` (in **microTari**) at the given `priority`.
@@ -51,7 +51,7 @@ Future<FeeEstimate> estimateTransactionFeeForOutputs(
 /// Computed by minotari exactly as the send-all in
 /// [`send_transaction`](crate::api::send_transaction::send_transaction)
 /// computes it, at the same fee per gram, so `amount_after_fee` is what that send
-/// pays. `payment_id` changes the output size and so the fee; pass the one the send
+/// pays. To send at another rate, quote with [`estimate_send_all_fee_at`]. `payment_id` changes the output size and so the fee; pass the one the send
 /// will use, and the same `confirmation_window` (`None` → 3, as for the send).
 /// Offline: reads only the wallet database. `network` as elsewhere (`None` → MainNet). Errors if the address is invalid or the wallet's spendable
 /// balance would leave the recipient only dust. Requires
@@ -69,10 +69,31 @@ Future<SendAllFeeEstimate> estimateSendAllFee(
         network: network,
         confirmationWindow: confirmationWindow);
 
+/// [`estimate_send_all_fee`] at `fee_per_gram` (µT per gram), quoting the send-all of
+/// [`send_transaction_at_fee`](crate::api::send_transaction::send_transaction_at_fee)
+/// at the same rate. Errors with `Invalid fee per gram: …` for a rate of 0 or above the
+/// cap, before the wallet is read.
+Future<SendAllFeeEstimate> estimateSendAllFeeAt(
+        {required String walletName,
+        required String recipientAddress,
+        String? paymentId,
+        TariNetwork? network,
+        BigInt? confirmationWindow,
+        required BigInt feePerGram}) =>
+    RustLib.instance.api.crateApiFeeEstimateSendAllFeeAt(
+        walletName: walletName,
+        recipientAddress: recipientAddress,
+        paymentId: paymentId,
+        network: network,
+        confirmationWindow: confirmationWindow,
+        feePerGram: feePerGram);
+
 /// A fee estimate for a prospective send.
 ///
 /// `estimated_fee` and `total_amount_required` (amount + fee) are in **microTari**;
-/// `fee_per_gram` is the rate in microTari per gram of transaction weight;
+/// `fee_per_gram` is the rate in microTari per gram of transaction weight (the node's
+/// rate, capped at the most a send accepts, so it can be passed to
+/// [`send_transaction_at_fee`](crate::api::send_transaction::send_transaction_at_fee));
 /// `input_count` is how many UTXOs would be spent.
 class FeeEstimate {
   final BigInt estimatedFee;
