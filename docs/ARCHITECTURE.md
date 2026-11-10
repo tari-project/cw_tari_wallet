@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the post-refactor design of `rust_lib_flutter_rust_wallet`
+This document describes the post-refactor design of `minotari_wallet_ffi`
 — the layering, error model, secret handling, state management, and the
 streaming/async contract. The single overriding constraint behind all of them
 is the **frozen public API contract** (see the

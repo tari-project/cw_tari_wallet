@@ -9,11 +9,9 @@
 //! No real base node, fully deterministic. `make record-fixtures` refreshes the
 //! committed captures if the upstream RPC shape changes.
 
-use rust_lib_flutter_rust_wallet::api::base_node::{
-    check_node_health, get_tip_info, is_node_synced,
-};
-use rust_lib_flutter_rust_wallet::api::height::get_height_at_time;
-use rust_lib_flutter_rust_wallet::api::network::{current_network, TariNetwork};
+use minotari_wallet_ffi::api::base_node::{check_node_health, get_tip_info, is_node_synced};
+use minotari_wallet_ffi::api::height::get_height_at_time;
+use minotari_wallet_ffi::api::network::{current_network, TariNetwork};
 use verify::fixture::rpc;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};

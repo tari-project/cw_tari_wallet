@@ -21,7 +21,7 @@ live-e2e = []
 # The library under test — its EXACT public API is what the harness exercises.
 # Path dependency (workspace member), so it can never drift from what CI builds
 # and there is no divergent dependency pin.
-rust_lib_flutter_rust_wallet = { path = ".." }
+minotari_wallet_ffi = { path = ".." }
 
 # Used by the fixture recorder to seed deterministic wallet rows (balance
 # changes + a displayed transaction) directly into the SQLite DB via the same

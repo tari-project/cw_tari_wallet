@@ -1,4 +1,4 @@
-# cargo-deny configuration for rust_lib_flutter_rust_wallet.
+# cargo-deny configuration for minotari_wallet_ffi.
 #
 # Run with: cargo deny check
 # CI wiring: `.github/workflows/ci.yml` runs `cargo deny check` as a

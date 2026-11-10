@@ -19,7 +19,7 @@ tag="$2"
 # Relative paths only: Windows Python cannot read Git Bash's /d/... paths.
 out="$3"
 mkdir -p "$out"
-lib=rust_lib_flutter_rust_wallet
+lib=minotari_wallet_ffi
 stage="target/release-stage/$platform"
 rm -rf "$stage" && mkdir -p "$stage"
 release_dir() { echo "target/$1/release"; }

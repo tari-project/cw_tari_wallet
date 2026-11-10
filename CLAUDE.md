@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`rust_lib_flutter_rust_wallet` is a [flutter_rust_bridge](https://github.com/fzyzcjy/flutter_rust_bridge) (FRB v2) binding that wraps the Tari `minotari` wallet for use from Flutter. It is the wallet backend consumed by **Cake Wallet in production**. The Rust crate compiles to native libs (`lib`/`cdylib`/`staticlib`); FRB generates the committed Dart glue.
+`minotari_wallet_ffi` is a [flutter_rust_bridge](https://github.com/fzyzcjy/flutter_rust_bridge) (FRB v2) binding that wraps the Tari `minotari` wallet for use from Flutter. It is the wallet backend consumed by **Cake Wallet in production**. The Rust crate compiles to native libs (`lib`/`cdylib`/`staticlib`); FRB generates the committed Dart glue.
 
 ## The frozen public API contract (read this first)
 

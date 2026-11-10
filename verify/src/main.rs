@@ -109,15 +109,15 @@ mod live {
     //! esmeralda test wallet whose secrets live in CI secrets.
 
     use anyhow::{bail, Context, Result};
-    use rust_lib_flutter_rust_wallet::api::balance::get_balance;
-    use rust_lib_flutter_rust_wallet::api::base_node::{get_tip_info, is_node_synced};
-    use rust_lib_flutter_rust_wallet::api::db::{lock_wallet, set_database_path, unlock_wallet};
-    use rust_lib_flutter_rust_wallet::api::network::TariNetwork;
-    use rust_lib_flutter_rust_wallet::api::scanner::{
+    use minotari_wallet_ffi::api::balance::get_balance;
+    use minotari_wallet_ffi::api::base_node::{get_tip_info, is_node_synced};
+    use minotari_wallet_ffi::api::db::{lock_wallet, set_database_path, unlock_wallet};
+    use minotari_wallet_ffi::api::network::TariNetwork;
+    use minotari_wallet_ffi::api::scanner::{
         create_scan_handle, start_scan_with_handler, ScanConfiguration, ScanEventDto, ScanPriority,
     };
-    use rust_lib_flutter_rust_wallet::api::transactions::get_transactions;
-    use rust_lib_flutter_rust_wallet::api::wallet::{list_wallets, restore_wallet};
+    use minotari_wallet_ffi::api::transactions::get_transactions;
+    use minotari_wallet_ffi::api::wallet::{list_wallets, restore_wallet};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use zeroize::Zeroizing;

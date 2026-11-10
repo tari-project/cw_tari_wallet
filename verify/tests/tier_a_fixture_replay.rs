@@ -20,25 +20,25 @@
 use std::cell::RefCell;
 use std::sync::Mutex;
 
-use rust_lib_flutter_rust_wallet::api::address::get_address;
-use rust_lib_flutter_rust_wallet::api::balance::get_balance;
-use rust_lib_flutter_rust_wallet::api::db::{lock_wallet, set_database_path, unlock_wallet};
-use rust_lib_flutter_rust_wallet::api::fee::{
+use minotari_wallet_ffi::api::address::get_address;
+use minotari_wallet_ffi::api::balance::get_balance;
+use minotari_wallet_ffi::api::db::{lock_wallet, set_database_path, unlock_wallet};
+use minotari_wallet_ffi::api::fee::{
     estimate_send_all_fee, estimate_transaction_fee_for_outputs, FeePriority,
 };
-use rust_lib_flutter_rust_wallet::api::network::current_network;
-use rust_lib_flutter_rust_wallet::api::network::TariNetwork;
-use rust_lib_flutter_rust_wallet::api::scanner::{
+use minotari_wallet_ffi::api::network::current_network;
+use minotari_wallet_ffi::api::network::TariNetwork;
+use minotari_wallet_ffi::api::scanner::{
     create_scan_handle, rescan_with_handler, start_scan_with_handler, stop_scan, ScanConfiguration,
     ScanEventDto, ScanPriority,
 };
-use rust_lib_flutter_rust_wallet::api::send_transaction::{
+use minotari_wallet_ffi::api::send_transaction::{
     abandon_send, send_transaction_with_handler, MultiSendTransactionDetails, SendRecipient,
     TransactionStage,
 };
-use rust_lib_flutter_rust_wallet::api::signing::{sign_message, verify_message};
-use rust_lib_flutter_rust_wallet::api::transactions::get_transactions;
-use rust_lib_flutter_rust_wallet::api::wallet::{
+use minotari_wallet_ffi::api::signing::{sign_message, verify_message};
+use minotari_wallet_ffi::api::transactions::get_transactions;
+use minotari_wallet_ffi::api::wallet::{
     change_passphrase, import_wallet_from_keys, list_wallets, restore_wallet,
 };
 use verify::fixture;
@@ -184,7 +184,7 @@ fn get_transactions_returns_the_golden_transaction() {
     assert!(
         matches!(
             tx.direction,
-            rust_lib_flutter_rust_wallet::api::transactions::DisplayedTransactionDirection::Incoming
+            minotari_wallet_ffi::api::transactions::DisplayedTransactionDirection::Incoming
         ),
         "tx direction is Incoming"
     );
@@ -868,7 +868,7 @@ fn send_via_mock_node(
     funded: &FundedWallet,
     runtime: &tokio::runtime::Runtime,
     accepted: Option<bool>,
-) -> rust_lib_flutter_rust_wallet::api::send_transaction::SendResultDto {
+) -> minotari_wallet_ffi::api::send_transaction::SendResultDto {
     runtime
         .block_on(async {
             let server = wiremock::MockServer::start().await;
@@ -1332,8 +1332,8 @@ fn a_same_priority_scan_supersedes_the_running_one() {
 // tripwire for the frozen contract.
 // ---------------------------------------------------------------------------
 
-use rust_lib_flutter_rust_wallet::api::balance::AccountBalanceDto;
-use rust_lib_flutter_rust_wallet::api::transactions::DisplayedTransactionDto;
+use minotari_wallet_ffi::api::balance::AccountBalanceDto;
+use minotari_wallet_ffi::api::transactions::DisplayedTransactionDto;
 use serde::Serialize;
 
 #[derive(Serialize)]

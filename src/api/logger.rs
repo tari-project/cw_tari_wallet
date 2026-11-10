@@ -590,10 +590,7 @@ mod tests {
     #[test]
     fn default_config_keeps_levels_and_caps_reqwest() {
         let levels = default_levels();
-        assert_eq!(
-            levels.level_for("rust_lib_flutter_rust_wallet"),
-            LevelFilter::Info
-        );
+        assert_eq!(levels.level_for("minotari_wallet_ffi"), LevelFilter::Info);
         assert_eq!(levels.level_for("minotari::scan"), LevelFilter::Info);
         assert_eq!(levels.level_for("hyper"), LevelFilter::Warn);
         assert_eq!(levels.level_for("hyper::client"), LevelFilter::Warn);
