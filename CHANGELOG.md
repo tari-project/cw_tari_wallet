@@ -38,7 +38,8 @@ diff) before the version is tagged.
 
 ### Added (additive, SPEC-20)
 - `send_transaction_at_fee(sink, details, fee_per_gram)`: `send_transaction` built at
-  the given rate (µT per gram) instead of the fixed 5.
+  the given rate (µT per gram) instead of the fixed 5. The rate is exact; the fee is
+  exactly the quote only for a send-all (a normal send's fee estimate stays an estimate).
 - `estimate_send_all_fee_at(…, fee_per_gram)`: the send-all quote at that rate.
 - Both refuse a rate of 0 or above 100 µT/gram, before any UTXO is reserved, with the
   new error `Invalid fee per gram: <rate> (must be 1 to 100 microTari per gram)`.
@@ -53,8 +54,9 @@ diff) before the version is tagged.
 - Bumped `minotari-wallet-core` to minotari-cli `80e8ac9` (the merge of tari-project/minotari-cli#179)
   and the `tari_*` crates to `=6.3.0-pre.4` (`tari_sidechain` 9.0). No change to
   the bridge.
-- Fee estimates cap the node's fee per gram at 100 µT/gram (fee rescaled to match), so
-  an estimate's `fee_per_gram` is always a rate `send_transaction_at_fee` accepts.
+- Fee estimates cap the node's fee per gram at 100 µT/gram before selecting inputs, so
+  an estimate's `fee_per_gram` is always a rate `send_transaction_at_fee` accepts and a
+  wallet that can pay at the cap is quoted. At or below the cap estimates are unchanged.
 
 ### Security
 

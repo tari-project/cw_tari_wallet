@@ -717,42 +717,126 @@ fn fee_for_more_outputs_is_higher() {
     assert_eq!(three.total_amount_required, 1_000_000 + three.estimated_fee);
 }
 
-/// A node quoting above the cap is quoted at the cap, as if the node had said the cap.
+/// A mock node answering fee-per-gram `stats` (`(min, avg)` per block; empty: no stats).
+async fn node_with_fee_stats(stats: &[(u64, u64)]) -> wiremock::MockServer {
+    let server = wiremock::MockServer::start().await;
+    if !stats.is_empty() {
+        let stats: Vec<_> = stats
+            .iter()
+            .enumerate()
+            .map(|(order, (min, avg))| {
+                serde_json::json!({
+                    "order": order, "min_fee_per_gram": min, "avg_fee_per_gram": avg,
+                    "max_fee_per_gram": avg,
+                })
+            })
+            .collect();
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/get_mempool_fee_per_gram_stats"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "stats": stats })),
+            )
+            .mount(&server)
+            .await;
+    }
+    server
+}
+
+/// A node rate above the cap is capped before inputs are selected: a wallet that can pay
+/// at the cap, but not at the node's rate, is quoted exactly as at a node saying the cap.
 #[test]
-fn node_fee_rates_are_capped() {
+fn node_fee_rates_are_capped_before_inputs_are_selected() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let _funded = with_funded_wallet();
 
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let estimate_with_node_rate = |rate: u64| {
         runtime.block_on(async {
-            let server = wiremock::MockServer::start().await;
-            wiremock::Mock::given(wiremock::matchers::method("GET"))
-                .and(wiremock::matchers::path("/get_mempool_fee_per_gram_stats"))
-                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({ "stats": [
-                        { "order": 0, "min_fee_per_gram": rate, "avg_fee_per_gram": rate, "max_fee_per_gram": rate },
-                    ] }),
-                ))
-                .mount(&server)
-                .await;
+            let server = node_with_fee_stats(&[(rate, rate)]).await;
             estimate_transaction_fee_for_outputs(
-                1_000_000,
+                5_000_000,
                 1,
                 FeePriority::Fast,
                 server.uri(),
                 FUNDED.to_string(),
             )
             .await
-            .expect("estimate")
         })
     };
-    let at_cap = estimate_with_node_rate(100);
+    let at_cap = estimate_with_node_rate(100).expect("affordable at the cap");
     assert_eq!(at_cap.fee_per_gram, 100);
-    let over = estimate_with_node_rate(5_000);
+    assert_eq!(
+        at_cap.input_count, 3,
+        "5 T of 1, 2 and 3 T needs every output"
+    );
+    // 1 T a gram: the 6 T wallet could never pay this.
+    let over = estimate_with_node_rate(1_000_000).expect("quoted at the cap");
     assert_eq!(over.fee_per_gram, 100);
+    assert_eq!(over.input_count, at_cap.input_count);
     assert_eq!(over.estimated_fee, at_cap.estimated_fee);
-    assert_eq!(over.total_amount_required, 1_000_000 + at_cap.estimated_fee);
+    assert_eq!(over.total_amount_required, 5_000_000 + at_cap.estimated_fee);
+}
+
+/// Upstream-drift tripwire: at or below the cap, the bridge's estimate is exactly
+/// minotari's `FeeEstimator::estimate_fees` for that priority.
+#[test]
+fn fee_estimates_below_the_cap_match_minotari() {
+    use minotari_wallet::transactions::fee_estimator::{
+        FeeEstimator, FeePriority as LibFeePriority,
+    };
+
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let pool = minotari_wallet::db::init_db(funded.db.db_path.clone()).expect("pool");
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    runtime.block_on(async {
+        // No stats (minotari's defaults), zeros (its minimum), one block, three blocks.
+        for stats in [
+            vec![],
+            vec![(0, 0), (0, 0)],
+            vec![(4, 30)],
+            vec![(9, 100), (6, 40), (2, 12)],
+        ] {
+            let server = node_with_fee_stats(&stats).await;
+            for (amount, outputs) in [(1_000, 1), (2_500_000, 2), (5_000_000, 1)] {
+                let upstream = FeeEstimator::new(pool.clone(), server.uri())
+                    .estimate_fees(
+                        FUNDED,
+                        tari_transaction_components::MicroMinotari(amount),
+                        outputs,
+                        3,
+                        None,
+                    )
+                    .await
+                    .expect("upstream estimate");
+                for priority in [FeePriority::Slow, FeePriority::Medium, FeePriority::Fast] {
+                    let ours = estimate_transaction_fee_for_outputs(
+                        amount,
+                        outputs as u32,
+                        priority,
+                        server.uri(),
+                        FUNDED.to_string(),
+                    )
+                    .await
+                    .expect("estimate");
+                    let theirs = upstream
+                        .iter()
+                        .find(|e| e.priority == LibFeePriority::from(priority))
+                        .expect("every priority");
+                    let case = format!("{stats:?} {amount} x{outputs} {priority:?}");
+                    assert_eq!(ours.fee_per_gram, theirs.fee_per_gram.0, "{case}");
+                    assert_eq!(ours.estimated_fee, theirs.estimated_fee.0, "{case}");
+                    assert_eq!(
+                        ours.total_amount_required, theirs.total_amount_required.0,
+                        "{case}"
+                    );
+                    assert_eq!(ours.input_count, theirs.input_count, "{case}");
+                }
+            }
+        }
+    });
 }
 
 #[test]

@@ -6,9 +6,18 @@ use crate::api::db::get_db_pool;
 use crate::api::error::WalletError;
 use crate::api::network::{parse_network, TariNetwork};
 use crate::domain::validation::{validate_fee_per_gram, validate_recipient};
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use flutter_rust_bridge::frb;
-use minotari_wallet::transactions::fee_estimator::{FeeEstimator, FeePriority as LibFeePriority};
+use minotari_wallet::db::{get_account_by_name, SqlitePool};
+use minotari_wallet::http::WalletHttpClient;
+use minotari_wallet::transactions::fee_estimator::{
+    estimated_output_size_for_send, FeeEstimator, FeePriority as LibFeePriority,
+};
+use minotari_wallet::transactions::fund_locker::MIN_FEE_PER_GRAM;
+use minotari_wallet::transactions::input_selector::InputSelector;
+use tari_common_types::tari_address::TariAddress;
+use tari_transaction_components::fee::Fee;
+use tari_transaction_components::weight::TransactionWeight;
 use tari_transaction_components::MicroMinotari;
 
 /// Desired confirmation speed for a transaction, trading fee against latency:
@@ -36,7 +45,9 @@ impl From<FeePriority> for LibFeePriority {
 /// `estimated_fee` and `total_amount_required` (amount + fee) are in **microTari**;
 /// `fee_per_gram` is the rate in microTari per gram of transaction weight (the node's
 /// rate, capped at the most a send accepts, so it can be passed to
-/// [`send_transaction_at_fee`](crate::api::send_transaction::send_transaction_at_fee));
+/// [`send_transaction_at_fee`](crate::api::send_transaction::send_transaction_at_fee),
+/// which builds at exactly that rate; the fee it pays can still differ from
+/// `estimated_fee`, which sizes a plain output without a payment id);
 /// `input_count` is how many UTXOs would be spent.
 #[frb]
 #[derive(Debug, Clone)]
@@ -90,58 +101,92 @@ async fn estimate_fee(
     wallet_name: String,
 ) -> Result<FeeEstimate> {
     let pool = get_db_pool()?;
-
-    let estimator = FeeEstimator::new(pool, base_url);
-
-    let amount_micro = MicroMinotari(amount);
-
-    let estimates = estimator
-        .estimate_fees(
-            &wallet_name,
-            amount_micro,
-            num_outputs,
-            DEFAULT_CONFIRMATION_WINDOW,
-            None, // estimated_output_size: let the estimator use its own default
-        )
-        .await
-        .context("Failed to estimate fees")?;
-
-    let target_priority: LibFeePriority = priority.into();
-
-    let selected_estimate = estimates
-        .into_iter()
-        .find(|e| e.priority == target_priority)
-        .ok_or_else(|| {
-            WalletError::internal("Could not find fee estimate for requested priority")
-        })?;
-
-    let (fee_per_gram, estimated_fee) = cap_rate(
-        selected_estimate.fee_per_gram.0,
-        selected_estimate.estimated_fee.0,
-        MAX_FEE_PER_GRAM,
+    capped_estimate(
+        pool,
+        &base_url,
+        &wallet_name,
+        MicroMinotari(amount),
+        num_outputs,
+        priority,
     )
-    .ok_or_else(|| WalletError::internal("Failed to estimate fees"))?;
+    .await
+    .context("Failed to estimate fees")
+}
+
+/// minotari's `FeeEstimator::estimate_fees` for one `priority`, except that the node's
+/// rates are capped at [`MAX_FEE_PER_GRAM`] before inputs are selected, so a wallet that
+/// can pay at the cap gets a quote. Kept step for step with upstream (pinned against it in
+/// the verify harness): at or below the cap the estimate is upstream's.
+async fn capped_estimate(
+    pool: SqlitePool,
+    base_url: &str,
+    wallet_name: &str,
+    amount: MicroMinotari,
+    num_outputs: usize,
+    priority: FeePriority,
+) -> Result<FeeEstimate> {
+    let conn = pool.get()?;
+    let account = get_account_by_name(&conn, wallet_name)?
+        .ok_or_else(|| anyhow!("Account with name '{}' not found", wallet_name))?;
+
+    let client = WalletHttpClient::new(base_url.parse()?)?;
+    let stats = client.get_mempool_fee_per_gram_stats(3).await.ok();
+    // Fast: the next block's average; Medium: the second block's; Slow: the deepest
+    // block's minimum. No stats: minotari's defaults.
+    let (fast, medium, slow) = match stats.as_deref() {
+        Some([first, rest @ ..]) => (
+            first.avg_fee_per_gram,
+            rest.first().unwrap_or(first).avg_fee_per_gram,
+            rest.last().unwrap_or(first).min_fee_per_gram,
+        ),
+        _ => (MicroMinotari(10), MicroMinotari(5), MicroMinotari(1)),
+    };
+    let (fast, medium, slow) = (cap(fast), cap(medium), cap(slow));
+
+    let selection = InputSelector::new(account.id, DEFAULT_CONFIRMATION_WINDOW)
+        .fetch_unspent_outputs(&conn, amount, num_outputs, fast, None)?;
+    let input_count = selection.utxos.len();
+    let total_outputs = if selection.requires_change_output {
+        num_outputs
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("Too many outputs to estimate a fee for"))?
+    } else {
+        num_outputs
+    };
+    let output_size = estimated_output_size_for_send(0, num_outputs, &TariAddress::default())?;
+    let total_output_size = output_size
+        .checked_mul(total_outputs)
+        .ok_or_else(|| anyhow!("Total output size overflows while estimating fee"))?;
+
+    let fee_per_gram = match priority {
+        FeePriority::Slow => slow,
+        FeePriority::Medium => medium,
+        FeePriority::Fast => fast,
+    };
+    let fee = Fee::new(TransactionWeight::latest()).calculate(
+        fee_per_gram,
+        1,
+        input_count,
+        total_outputs,
+        total_output_size,
+    );
+    let total_amount_required = amount
+        .checked_add(fee)
+        .ok_or_else(|| anyhow!("Amount plus fee overflows while estimating fee"))?;
 
     Ok(FeeEstimate {
-        estimated_fee,
-        // minotari checked `amount + fee` at the node's rate; a capped fee is smaller.
-        total_amount_required: amount.saturating_add(estimated_fee),
-        fee_per_gram,
-        input_count: selected_estimate.input_count,
+        estimated_fee: fee.0,
+        total_amount_required: total_amount_required.0,
+        fee_per_gram: fee_per_gram.0,
+        input_count,
     })
 }
 
-/// The node's `fee_per_gram` capped at `max`, with `fee` rescaled to it, as
-/// `(fee_per_gram, fee)`. `None` if `fee` saturated, as its weight is then unknown.
-fn cap_rate(fee_per_gram: u64, fee: u64, max: u64) -> Option<(u64, u64)> {
-    if fee_per_gram <= max {
-        return Some((fee_per_gram, fee));
-    }
-    // minotari's fee is weight * rate (saturating), so the weight divides out exactly.
-    if fee == u64::MAX || !fee.is_multiple_of(fee_per_gram) {
-        return None;
-    }
-    Some((max, fee / fee_per_gram * max))
+/// A node rate as a send rate: at least minotari's minimum (the node's integer averages can
+/// be 0) and at most [`MAX_FEE_PER_GRAM`].
+fn cap(rate: MicroMinotari) -> MicroMinotari {
+    rate.max(MIN_FEE_PER_GRAM)
+        .min(MicroMinotari(MAX_FEE_PER_GRAM))
 }
 
 /// What a send-all would cost and pay, from [`estimate_send_all_fee`].
@@ -252,15 +297,20 @@ mod tests {
     }
 
     #[test]
-    fn node_rates_are_capped_with_the_fee_rescaled() {
-        // At or under the cap: unchanged.
-        assert_eq!(cap_rate(5, 5_000, 100), Some((5, 5_000)));
-        assert_eq!(cap_rate(100, 100_000, 100), Some((100, 100_000)));
-        // Above it: weight 1_000 at the cap.
-        assert_eq!(cap_rate(101, 101_000, 100), Some((100, 100_000)));
-        assert_eq!(cap_rate(5_000, 5_000_000, 100), Some((100, 100_000)));
-        // A saturated fee has no recoverable weight.
-        assert_eq!(cap_rate(u64::MAX, u64::MAX, 100), None);
-        assert_eq!(cap_rate(1_000, 1_001, 100), None);
+    fn node_rates_are_held_between_the_minimum_and_the_cap() {
+        assert_eq!(cap(MicroMinotari(0)), MIN_FEE_PER_GRAM);
+        assert_eq!(cap(MicroMinotari(5)), MicroMinotari(5));
+        assert_eq!(
+            cap(MicroMinotari(MAX_FEE_PER_GRAM)),
+            MicroMinotari(MAX_FEE_PER_GRAM)
+        );
+        assert_eq!(
+            cap(MicroMinotari(MAX_FEE_PER_GRAM + 1)),
+            MicroMinotari(MAX_FEE_PER_GRAM)
+        );
+        assert_eq!(
+            cap(MicroMinotari(u64::MAX)),
+            MicroMinotari(MAX_FEE_PER_GRAM)
+        );
     }
 }

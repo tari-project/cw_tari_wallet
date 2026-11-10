@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `cap_rate`, `estimate_fee`
+// These functions are ignored because they are not marked as `pub`: `cap`, `capped_estimate`, `estimate_fee`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `from`
 
 /// Estimate the fee to send `amount` (in **microTari**) at the given `priority`.
@@ -93,7 +93,9 @@ Future<SendAllFeeEstimate> estimateSendAllFeeAt(
 /// `estimated_fee` and `total_amount_required` (amount + fee) are in **microTari**;
 /// `fee_per_gram` is the rate in microTari per gram of transaction weight (the node's
 /// rate, capped at the most a send accepts, so it can be passed to
-/// [`send_transaction_at_fee`](crate::api::send_transaction::send_transaction_at_fee));
+/// [`send_transaction_at_fee`](crate::api::send_transaction::send_transaction_at_fee),
+/// which builds at exactly that rate; the fee it pays can still differ from
+/// `estimated_fee`, which sizes a plain output without a payment id);
 /// `input_count` is how many UTXOs would be spent.
 class FeeEstimate {
   final BigInt estimatedFee;

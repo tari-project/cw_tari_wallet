@@ -477,8 +477,9 @@ pub async fn send_transaction(
 /// rate: pass the `fee_per_gram` of the
 /// [`FeeEstimate`](crate::api::fee::FeeEstimate) the user confirmed, or for a send-all
 /// the rate given to
-/// [`estimate_send_all_fee_at`](crate::api::fee::estimate_send_all_fee_at), so the
-/// quote and the send match. A rate of 0 or above the cap errors with
+/// [`estimate_send_all_fee_at`](crate::api::fee::estimate_send_all_fee_at). The send is
+/// built at exactly that rate. Only a send-all's fee is exactly its quote; a normal
+/// send's fee can differ from the estimate's `estimated_fee`. A rate of 0 or above the cap errors with
 /// `Invalid fee per gram: …` before any UTXO is reserved. Otherwise as
 /// [`send_transaction`], including that a closed sink does not abort the send.
 #[frb]
