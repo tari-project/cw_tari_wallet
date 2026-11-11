@@ -2354,6 +2354,19 @@ impl SseDecode for Option<crate::api::logger::LoggerConfig> {
     }
 }
 
+impl SseDecode for Option<crate::api::send_transaction::SendResultDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::send_transaction::SendResultDto>::sse_decode(
+                deserializer,
+            ));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<crate::api::network::TariNetwork> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2621,9 +2634,12 @@ impl SseDecode for crate::api::send_transaction::SendTransactionEvent {
         let mut var_stage =
             <crate::api::send_transaction::TransactionStage>::sse_decode(deserializer);
         let mut var_details = <String>::sse_decode(deserializer);
+        let mut var_result =
+            <Option<crate::api::send_transaction::SendResultDto>>::sse_decode(deserializer);
         return crate::api::send_transaction::SendTransactionEvent {
             stage: var_stage,
             details: var_details,
+            result: var_result,
         };
     }
 }
@@ -3486,6 +3502,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::send_transaction::SendTransac
         [
             self.stage.into_into_dart().into_dart(),
             self.details.into_into_dart().into_dart(),
+            self.result.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -4010,6 +4027,16 @@ impl SseEncode for Option<crate::api::logger::LoggerConfig> {
     }
 }
 
+impl SseEncode for Option<crate::api::send_transaction::SendResultDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::send_transaction::SendResultDto>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<crate::api::network::TariNetwork> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -4233,6 +4260,7 @@ impl SseEncode for crate::api::send_transaction::SendTransactionEvent {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <crate::api::send_transaction::TransactionStage>::sse_encode(self.stage, serializer);
         <String>::sse_encode(self.details, serializer);
+        <Option<crate::api::send_transaction::SendResultDto>>::sse_encode(self.result, serializer);
     }
 }
 

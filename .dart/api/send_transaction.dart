@@ -15,7 +15,8 @@ import 'transactions.dart';
 
 /// Give up a stalled send and release its inputs.
 ///
-/// `transaction_id` is the send's `DisplayedTransactionDto.id`; `passphrase`
+/// `transaction_id` is the send's `DisplayedTransactionDto.id` (for a send made with
+/// [`send_transaction`]: `result.transaction.id` of its `Broadcasted` event); `passphrase`
 /// (**secret**) must open wallet `wallet_name`. Delegates to minotari, which only
 /// abandons a send that is not mined and has stalled: the node refused its last
 /// rebroadcasts in a row (rebroadcasts happen while a scan runs, so keep scanning
@@ -54,7 +55,9 @@ Future<String> abandonSend(
 ///
 /// Streams a [`SendTransactionEvent`] for each [`TransactionStage`] over `sink` and
 /// resolves to a [`SendResultDto`]: the recorded, `Pending` transaction plus whether
-/// the node accepted it. The wallet must be unlocked; no seed words or passphrase are
+/// the node accepted it. FRB does not hand that return value to Dart, so the final
+/// `Broadcasted` event carries the same value in its `result` field; read the
+/// outcome there. The wallet must be unlocked; no seed words or passphrase are
 /// needed. Each recipient gets its own output carrying its own `payment_id`.
 ///
 /// `Ok` means the send is recorded, not necessarily accepted by the node; the scan's
@@ -166,7 +169,8 @@ class SendRecipient {
           paymentId == other.paymentId;
 }
 
-/// The outcome of a [`send_transaction`].
+/// The outcome of a [`send_transaction`], delivered to Dart as the `result` of the
+/// final `Broadcasted` [`SendTransactionEvent`].
 ///
 /// `transaction` is the recorded send, pending until the scan sees it mined.
 /// `accepted_by_node` is whether the node took the first broadcast (or already had
@@ -210,17 +214,28 @@ class SendResultDto {
 
 /// A progress event streamed during [`send_transaction`]: the current
 /// [`TransactionStage`] plus a human-readable `details` message.
+///
+/// `result` is the send's outcome, the same [`SendResultDto`] the call resolves to
+/// (FRB does not deliver a streaming fn's return value to Dart, so this is how Dart
+/// learns it). It is set only on the final `Broadcasted` event and `None` on every
+/// other stage. Read `result.transaction.id` (the id [`abandon_send`] takes),
+/// `result.accepted_by_node`, `result.node_reason` and `result.note` from it; when
+/// `accepted_by_node` is `false` the send is recorded and rebroadcast, so **do not
+/// send it again**. A send that fails before `Broadcasted` emits no `result` and
+/// resolves to the error instead.
 class SendTransactionEvent {
   final TransactionStage stage;
   final String details;
+  final SendResultDto? result;
 
   const SendTransactionEvent({
     required this.stage,
     required this.details,
+    this.result,
   });
 
   @override
-  int get hashCode => stage.hashCode ^ details.hashCode;
+  int get hashCode => stage.hashCode ^ details.hashCode ^ result.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -228,7 +243,8 @@ class SendTransactionEvent {
       other is SendTransactionEvent &&
           runtimeType == other.runtimeType &&
           stage == other.stage &&
-          details == other.details;
+          details == other.details &&
+          result == other.result;
 }
 
 /// The lifecycle stage of an in-flight send, carried on each

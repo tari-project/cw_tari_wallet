@@ -36,6 +36,16 @@ diff) before the version is tagged.
 
 ## [Unreleased]
 
+### Added (additive, SPEC-18)
+
+- `SendTransactionEvent.result` (`SendResultDto?`): the send's outcome on the
+  stream. FRB drops a streaming fn's return value, so Dart could not see it before.
+  It is set only on the final `Broadcasted` event, to exactly the value
+  `send_transaction` / `send_transaction_at_fee` resolve to: `transaction.id` (the
+  id `abandon_send` takes), `acceptedByNode`, `nodeReason` and `note`. Every other
+  event has `result == null`; the event set, order and `details` texts are
+  unchanged, and `TransactionStage` is untouched.
+
 ## [0.3.1] — 2026-11-11
 
 First published release of the v0.2 API. `v0.2.0` and `v0.3.0` were tagged but never

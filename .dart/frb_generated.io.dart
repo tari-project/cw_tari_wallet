@@ -107,6 +107,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ScanHandle dco_decode_box_autoadd_scan_handle(dynamic raw);
 
   @protected
+  SendResultDto dco_decode_box_autoadd_send_result_dto(dynamic raw);
+
+  @protected
   TariNetwork dco_decode_box_autoadd_tari_network(dynamic raw);
 
   @protected
@@ -205,6 +208,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   LoggerConfig? dco_decode_opt_box_autoadd_logger_config(dynamic raw);
+
+  @protected
+  SendResultDto? dco_decode_opt_box_autoadd_send_result_dto(dynamic raw);
 
   @protected
   TariNetwork? dco_decode_opt_box_autoadd_tari_network(dynamic raw);
@@ -360,6 +366,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ScanHandle sse_decode_box_autoadd_scan_handle(SseDeserializer deserializer);
 
   @protected
+  SendResultDto sse_decode_box_autoadd_send_result_dto(
+      SseDeserializer deserializer);
+
+  @protected
   TariNetwork sse_decode_box_autoadd_tari_network(SseDeserializer deserializer);
 
   @protected
@@ -463,6 +473,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   LoggerConfig? sse_decode_opt_box_autoadd_logger_config(
+      SseDeserializer deserializer);
+
+  @protected
+  SendResultDto? sse_decode_opt_box_autoadd_send_result_dto(
       SseDeserializer deserializer);
 
   @protected
@@ -626,6 +640,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       ScanHandle self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_send_result_dto(
+      SendResultDto self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_tari_network(
       TariNetwork self, SseSerializer serializer);
 
@@ -733,6 +751,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_logger_config(
       LoggerConfig? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_send_result_dto(
+      SendResultDto? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_tari_network(

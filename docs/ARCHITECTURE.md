@@ -293,7 +293,8 @@ Three functions stream progress to Dart over an FRB `StreamSink`:
 `send_transaction` (events: `SendTransactionEvent`), and `start_scan` and `rescan`
 (events: `ScanEventDto`). FRB discards the Rust return value of a streaming
 function, which is why the scan handle comes from `create_scan_handle` rather than
-from `start_scan`.
+from `start_scan`, and why the send's outcome rides on its final event
+(`SendTransactionEvent.result`).
 
 - **One scan implementation.** Both scan functions run `run_scan`; `rescan` rolls
   the wallet back once it owns the wallet's slot.
@@ -313,8 +314,11 @@ from `start_scan`.
     must finish (aborting it could lose funds).
 - **Send stages.** The send stream ends at `Broadcasted`: recorded and handed to the
   node, not confirmed. The send resolves to a `SendResultDto` (`accepted_by_node`
-  says whether the node took it; never resend after `Ok`). Confirmation is reported
-  by the scanner's `TransactionsUpdated`, not by the send stream.
+  says whether the node took it; never resend after `Ok`). Since FRB drops that
+  return value, the `Broadcasted` event carries the same value in its `result` field
+  (`None` on every earlier stage); the event set, order and `details` texts are
+  unchanged. Confirmation is reported by the scanner's `TransactionsUpdated`, not by
+  the send stream.
 
 ## Lint policy
 

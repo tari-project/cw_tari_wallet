@@ -35,7 +35,8 @@ use minotari_wallet_ffi::api::scanner::{
 };
 use minotari_wallet_ffi::api::send_transaction::{
     abandon_send, send_transaction_at_fee_with_handler, send_transaction_with_handler,
-    MultiSendTransactionDetails, SendRecipient, TransactionStage,
+    MultiSendTransactionDetails, SendRecipient, SendResultDto, SendTransactionEvent,
+    TransactionStage,
 };
 use minotari_wallet_ffi::api::signing::{sign_message, verify_message};
 use minotari_wallet_ffi::api::transactions::get_transactions;
@@ -1169,11 +1170,23 @@ fn send_via_mock_node(
     funded: &FundedWallet,
     runtime: &tokio::runtime::Runtime,
     accepted: Option<bool>,
-) -> minotari_wallet_ffi::api::send_transaction::SendResultDto {
-    runtime
+) -> SendResultDto {
+    let submit = accepted.map(|accepted| (accepted, "None"));
+    send_via_mock_node_with_events(funded, runtime, submit).1
+}
+
+/// [`send_via_mock_node`] answering `submit` with `(accepted, rejection_reason)`,
+/// returning every streamed event as well as the resolved result.
+fn send_via_mock_node_with_events(
+    funded: &FundedWallet,
+    runtime: &tokio::runtime::Runtime,
+    submit: Option<(bool, &str)>,
+) -> (Vec<SendTransactionEvent>, SendResultDto) {
+    let events = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let sent = runtime
         .block_on(async {
             let server = wiremock::MockServer::start().await;
-            if let Some(accepted) = accepted {
+            if let Some((accepted, rejection_reason)) = submit {
                 wiremock::Mock::given(wiremock::matchers::method("POST"))
                     .and(wiremock::matchers::path("/json_rpc"))
                     .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
@@ -1182,7 +1195,7 @@ fn send_via_mock_node(
                             "id": "1",
                             "result": {
                                 "accepted": accepted,
-                                "rejection_reason": "None",
+                                "rejection_reason": rejection_reason,
                                 "is_synced": true
                             }
                         }),
@@ -1200,9 +1213,77 @@ fn send_via_mock_node(
                 false,
                 server.uri(),
             );
-            send_transaction_with_handler(details, |_| {}).await
+            let sink = events.clone();
+            send_transaction_with_handler(details, move |event| sink.lock().unwrap().push(event))
+                .await
         })
-        .expect("send")
+        .expect("send");
+    let events = std::mem::take(&mut *events.lock().unwrap());
+    (events, sent)
+}
+
+/// The send stream's stage order is unchanged and only its last event, `Broadcasted`,
+/// carries `result`: exactly the value the send resolves to. Covers a node that
+/// accepts, one that refuses (`DoubleSpend`) and one that answers nothing.
+#[test]
+fn the_broadcasted_event_carries_the_send_result() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+    for submit in [Some((true, "None")), Some((false, "DoubleSpend")), None] {
+        let (events, sent) = send_via_mock_node_with_events(&funded, &runtime, submit);
+
+        let stages: Vec<_> = events.iter().map(|e| format!("{:?}", e.stage)).collect();
+        assert_eq!(
+            stages,
+            [
+                "Initializing",
+                "ValidatingInput",
+                "ConnectingToNetwork",
+                "ConstructingTransaction",
+                "SigningKeyGeneration",
+                "SigningTransaction",
+                "Broadcasting",
+                "Broadcasted",
+            ],
+            "{submit:?}"
+        );
+        let (last, earlier) = events.split_last().expect("events");
+        assert!(
+            earlier.iter().all(|e| e.result.is_none()),
+            "only the last event carries a result ({submit:?})"
+        );
+        assert_eq!(last.details, "Transaction broadcast");
+        let result = last
+            .result
+            .as_ref()
+            .expect("Broadcasted carries the result");
+        assert_eq!(result.transaction.id, sent.transaction.id);
+        assert_eq!(result.accepted_by_node, sent.accepted_by_node);
+        assert_eq!(result.node_reason, sent.node_reason);
+        assert_eq!(result.note, sent.note);
+        assert!(!result.transaction.id.is_empty());
+
+        match submit {
+            Some((true, _)) => {
+                assert!(result.accepted_by_node);
+                assert_eq!(result.node_reason, None);
+            }
+            Some((false, _)) => {
+                assert!(!result.accepted_by_node);
+                assert_eq!(
+                    result.node_reason.as_deref(),
+                    Some("Transaction not accepted: Double Spend")
+                );
+                assert!(result.note.is_some(), "the user is told not to resend");
+            }
+            None => {
+                assert!(!result.accepted_by_node);
+                assert!(result.node_reason.is_some());
+            }
+        }
+    }
 }
 
 /// Record that the node refused the send's last rebroadcasts until it stalled, as

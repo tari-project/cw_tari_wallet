@@ -1780,6 +1780,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SendResultDto dco_decode_box_autoadd_send_result_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_send_result_dto(raw);
+  }
+
+  @protected
   TariNetwork dco_decode_box_autoadd_tari_network(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_tari_network(raw);
@@ -2036,6 +2042,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SendResultDto? dco_decode_opt_box_autoadd_send_result_dto(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_send_result_dto(raw);
+  }
+
+  @protected
   TariNetwork? dco_decode_opt_box_autoadd_tari_network(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_tari_network(raw);
@@ -2224,11 +2236,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SendTransactionEvent dco_decode_send_transaction_event(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return SendTransactionEvent(
       stage: dco_decode_transaction_stage(arr[0]),
       details: dco_decode_String(arr[1]),
+      result: dco_decode_opt_box_autoadd_send_result_dto(arr[2]),
     );
   }
 
@@ -2492,6 +2505,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ScanHandle sse_decode_box_autoadd_scan_handle(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_scan_handle(deserializer));
+  }
+
+  @protected
+  SendResultDto sse_decode_box_autoadd_send_result_dto(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_send_result_dto(deserializer));
   }
 
   @protected
@@ -2807,6 +2827,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SendResultDto? sse_decode_opt_box_autoadd_send_result_dto(
+      SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_send_result_dto(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   TariNetwork? sse_decode_opt_box_autoadd_tari_network(
       SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -3032,7 +3064,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_stage = sse_decode_transaction_stage(deserializer);
     var var_details = sse_decode_String(deserializer);
-    return SendTransactionEvent(stage: var_stage, details: var_details);
+    var var_result = sse_decode_opt_box_autoadd_send_result_dto(deserializer);
+    return SendTransactionEvent(
+        stage: var_stage, details: var_details, result: var_result);
   }
 
   @protected
@@ -3309,6 +3343,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_send_result_dto(
+      SendResultDto self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_send_result_dto(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_tari_network(
       TariNetwork self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -3567,6 +3608,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_send_result_dto(
+      SendResultDto? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_send_result_dto(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_box_autoadd_tari_network(
       TariNetwork? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -3759,6 +3811,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_transaction_stage(self.stage, serializer);
     sse_encode_String(self.details, serializer);
+    sse_encode_opt_box_autoadd_send_result_dto(self.result, serializer);
   }
 
   @protected
