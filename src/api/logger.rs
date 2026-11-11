@@ -431,8 +431,7 @@ pub fn init_logger(base_path: String, config: Option<LoggerConfig>) -> Result<()
         AppendCount::new(config.max_files),
         file_rotate::ContentLimit::Bytes(max_file_bytes),
         Compression::None,
-        #[cfg(unix)]
-        Some(owner_only_open_options()),
+        owner_only_open_options(),
     );
     let log_writer = LogWriteFlagged {
         inner: LineWriter::new(file_rotator),
@@ -517,13 +516,19 @@ fn install_panic_hook() {
     });
 }
 
-/// file-rotate's default open options, plus owner-only (0o600) permissions.
+/// Owner-only (0600) log files on Unix. `None` elsewhere: file-rotate's defaults
+/// (Windows has no mode bits; the app data directory's ACL applies).
 #[cfg(unix)]
-fn owner_only_open_options() -> std::fs::OpenOptions {
+fn owner_only_open_options() -> Option<std::fs::OpenOptions> {
     use std::os::unix::fs::OpenOptionsExt;
     let mut options = std::fs::OpenOptions::new();
     options.read(true).create(true).append(true).mode(0o600);
-    options
+    Some(options)
+}
+
+#[cfg(not(unix))]
+fn owner_only_open_options() -> Option<std::fs::OpenOptions> {
+    None
 }
 
 fn set_levels(levels: Option<LogLevels>) {
