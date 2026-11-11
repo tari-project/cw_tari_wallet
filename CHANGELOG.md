@@ -36,6 +36,10 @@ diff) before the version is tagged.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-11-11
+
+Additive only: existing Dart code builds and behaves as on 0.3.1.
+
 ### Added (additive, SPEC-18)
 
 - `SendTransactionEvent.result` (`SendResultDto?`): the send's outcome on the
