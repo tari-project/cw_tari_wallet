@@ -27,7 +27,7 @@ minotari_wallet_ffi = { path = ".." }
 # changes + a displayed transaction) directly into the SQLite DB via the same
 # minotari db layer the library uses. Inherits the workspace's single resolved
 # version of every tari_* crate — no separate `tari_common_types` git pin.
-minotari-wallet = { package = "minotari-wallet-core", git = "https://github.com/tari-project/minotari-cli.git", rev = "80e8ac9a122ecb1c4c04f60d2b650206cf20e93c", default-features = false, features = ["http"] }
+minotari-wallet = { package = "minotari-wallet-core", git = "https://github.com/tari-project/minotari-cli.git", rev = "60aa0be35141e1cefe2e8f33cc2c524ae9b6b77e", default-features = false, features = ["http"] }
 tari_common = { version = "=6.3.0-pre.4" }
 tari_common_types = { version = "=6.3.0-pre.4" }
 tari_crypto = "=0.24.1"

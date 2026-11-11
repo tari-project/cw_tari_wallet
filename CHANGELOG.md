@@ -60,6 +60,13 @@ diff) before the version is tagged.
   scan never fails for it). The scan's event set and order are unchanged and
   `ScanEventDto` has no new variant.
 
+### Changed
+
+- Bumped `minotari-wallet-core` to minotari-cli `60aa0be` (the merge of
+  tari-project/minotari-cli#180, which lets a send require specific inputs and lists
+  an abandoned send's inputs). The `tari_*` crates stay at `=6.3.0-pre.4`. No change
+  to the bridge.
+
 ## [0.3.1] — 2026-11-11
 
 First published release of the v0.2 API. `v0.2.0` and `v0.3.0` were tagged but never
