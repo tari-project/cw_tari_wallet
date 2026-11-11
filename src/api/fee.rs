@@ -44,7 +44,8 @@ impl From<FeePriority> for LibFeePriority {
 ///
 /// `estimated_fee` and `total_amount_required` (amount + fee) are in **microTari**;
 /// `fee_per_gram` is the rate in microTari per gram of transaction weight (the node's
-/// rate, capped at the most a send accepts, so it can be passed to
+/// rate, capped at the most a send accepts, Medium and Fast never below 5 and the
+/// priorities kept in order, so it can be passed to
 /// [`send_transaction_at_fee`](crate::api::send_transaction::send_transaction_at_fee),
 /// which builds at exactly that rate; the fee it pays can still differ from
 /// `estimated_fee`, which sizes a plain output without a payment id);
@@ -113,8 +114,9 @@ async fn estimate_fee(
     .context("Failed to estimate fees")
 }
 
-/// The fee per gram (µT) the node suggests for `priority`, held between minotari's
-/// minimum and the most a send accepts: the rate a
+/// The fee per gram (µT) the node suggests for `priority`, at most the most a send
+/// accepts, at least minotari's minimum (Slow) or 5 (Medium and Fast), with Slow <=
+/// Medium <= Fast: the rate a
 /// [`FeeEstimate`] for that priority reports, without reading the wallet or selecting
 /// inputs. Pass it to
 /// [`estimate_send_all_fee_at`] and
@@ -131,8 +133,8 @@ pub async fn get_fee_per_gram(priority: FeePriority, base_url: String) -> Result
     Ok(rate_for(priority, rates).0)
 }
 
-/// The node's `(fast, medium, slow)` rates as minotari's `FeeEstimator` derives them, each
-/// passed through [`cap`].
+/// The node's `(fast, medium, slow)` rates as minotari's `FeeEstimator` derives them,
+/// passed through [`sane_rates`].
 async fn node_rates(base_url: &str) -> Result<(MicroMinotari, MicroMinotari, MicroMinotari)> {
     let client = WalletHttpClient::new(base_url.parse()?)?;
     let stats = client.get_mempool_fee_per_gram_stats(3).await.ok();
@@ -146,7 +148,21 @@ async fn node_rates(base_url: &str) -> Result<(MicroMinotari, MicroMinotari, Mic
         ),
         _ => (MicroMinotari(10), MicroMinotari(5), MicroMinotari(1)),
     };
-    Ok((cap(fast), cap(medium), cap(slow)))
+    Ok(sane_rates(fast, medium, slow))
+}
+
+/// Node rates as send rates: each [`cap`]ped, Medium and Fast never below the old fixed send
+/// rate, and Slow <= Medium <= Fast, so a node quoting 0 or out of order cannot make a
+/// Fast send crawl.
+fn sane_rates(
+    fast: MicroMinotari,
+    medium: MicroMinotari,
+    slow: MicroMinotari,
+) -> (MicroMinotari, MicroMinotari, MicroMinotari) {
+    let slow = cap(slow);
+    let medium = cap(medium).max(MicroMinotari(SEND_FEE_PER_GRAM)).max(slow);
+    let fast = cap(fast).max(MicroMinotari(SEND_FEE_PER_GRAM)).max(medium);
+    (fast, medium, slow)
 }
 
 fn rate_for(
@@ -329,6 +345,23 @@ mod tests {
         assert_eq!(
             LibFeePriority::from(FeePriority::Fast),
             LibFeePriority::Fast
+        );
+    }
+
+    #[test]
+    fn node_rates_are_floored_and_kept_in_order() {
+        let m = MicroMinotari;
+        // All-zero stats.
+        assert_eq!(sane_rates(m(0), m(0), m(0)), (m(5), m(5), m(1)));
+        // Inverted: Slow above Fast.
+        assert_eq!(sane_rates(m(2), m(3), m(50)), (m(50), m(50), m(50)));
+        // minotari's no-stats defaults, and ordered rates in range, are unchanged.
+        assert_eq!(sane_rates(m(10), m(5), m(1)), (m(10), m(5), m(1)));
+        assert_eq!(sane_rates(m(100), m(40), m(2)), (m(100), m(40), m(2)));
+        // Above the cap.
+        assert_eq!(
+            sane_rates(m(u64::MAX), m(500), m(200)),
+            (m(100), m(100), m(100))
         );
     }
 

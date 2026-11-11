@@ -778,8 +778,9 @@ fn node_fee_rates_are_capped_before_inputs_are_selected() {
     assert_eq!(over.total_amount_required, 5_000_000 + at_cap.estimated_fee);
 }
 
-/// Upstream-drift tripwire: at or below the cap, the bridge's estimate is exactly
-/// minotari's `FeeEstimator::estimate_fees` for that priority.
+/// Upstream-drift tripwire: when the node's rates are in order and Medium and Fast are
+/// within 5..=100, the bridge's estimate is exactly minotari's
+/// `FeeEstimator::estimate_fees` for that priority.
 #[test]
 fn fee_estimates_below_the_cap_match_minotari() {
     use minotari_wallet::transactions::fee_estimator::{
@@ -792,10 +793,10 @@ fn fee_estimates_below_the_cap_match_minotari() {
 
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(async {
-        // No stats (minotari's defaults), zeros (its minimum), one block, three blocks.
+        // No stats (minotari's defaults), a zero Slow (its minimum), one block, three blocks.
         for stats in [
             vec![],
-            vec![(0, 0), (0, 0)],
+            vec![(0, 5), (0, 5)],
             vec![(4, 30)],
             vec![(9, 100), (6, 40), (2, 12)],
         ] {
@@ -1028,8 +1029,9 @@ fn a_normal_send_is_built_at_the_given_rate() {
     assert_eq!(at_twenty, 4 * at_default);
 }
 
-/// The rate alone is the estimate's rate: capped, floored at minotari's minimum, and
-/// minotari's defaults when the node has no statistics.
+/// The rate alone is the estimate's rate: capped, Slow floored at minotari's minimum and
+/// Medium and Fast at 5, kept in order, and minotari's defaults when the node has no
+/// statistics.
 #[test]
 fn the_fee_per_gram_is_the_capped_node_rate() {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -1047,7 +1049,8 @@ fn the_fee_per_gram_is_the_capped_node_rate() {
             rates
         };
         assert_eq!(rates(&[]).await, [1, 5, 10], "no stats");
-        assert_eq!(rates(&[(0, 0)]).await, [1, 1, 1], "zeros");
+        assert_eq!(rates(&[(0, 0)]).await, [1, 5, 5], "zeros");
+        assert_eq!(rates(&[(2, 2), (50, 50)]).await, [50, 50, 50], "inverted");
         assert_eq!(rates(&[(9, 100), (6, 40), (2, 12)]).await, [2, 40, 100]);
         assert_eq!(
             rates(&[(5_000, 1_000_000)]).await,

@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `cap`, `capped_estimate`, `estimate_fee`, `node_rates`, `rate_for`
+// These functions are ignored because they are not marked as `pub`: `cap`, `capped_estimate`, `estimate_fee`, `node_rates`, `rate_for`, `sane_rates`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `from`
 
 /// Estimate the fee to send `amount` (in **microTari**) at the given `priority`.
@@ -46,8 +46,9 @@ Future<FeeEstimate> estimateTransactionFeeForOutputs(
         baseUrl: baseUrl,
         walletName: walletName);
 
-/// The fee per gram (µT) the node suggests for `priority`, held between minotari's
-/// minimum and the most a send accepts: the rate a
+/// The fee per gram (µT) the node suggests for `priority`, at most the most a send
+/// accepts, at least minotari's minimum (Slow) or 5 (Medium and Fast), with Slow <=
+/// Medium <= Fast: the rate a
 /// [`FeeEstimate`] for that priority reports, without reading the wallet or selecting
 /// inputs. Pass it to
 /// [`estimate_send_all_fee_at`] and
@@ -107,7 +108,8 @@ Future<SendAllFeeEstimate> estimateSendAllFeeAt(
 ///
 /// `estimated_fee` and `total_amount_required` (amount + fee) are in **microTari**;
 /// `fee_per_gram` is the rate in microTari per gram of transaction weight (the node's
-/// rate, capped at the most a send accepts, so it can be passed to
+/// rate, capped at the most a send accepts, Medium and Fast never below 5 and the
+/// priorities kept in order, so it can be passed to
 /// [`send_transaction_at_fee`](crate::api::send_transaction::send_transaction_at_fee),
 /// which builds at exactly that rate; the fee it pays can still differ from
 /// `estimated_fee`, which sizes a plain output without a payment id);
