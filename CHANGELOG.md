@@ -36,6 +36,11 @@ diff) before the version is tagged.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-11-11
+
+First published release of the v0.2 API (`v0.2.0` was tagged but never published,
+see below), plus the additions and fixes listed here.
+
 ### Added (additive, SPEC-20)
 - `send_transaction_at_fee(sink, details, fee_per_gram)`: `send_transaction` built at
   the given rate (µT per gram) instead of the fixed 5. The rate is exact; the fee is
@@ -70,7 +75,10 @@ diff) before the version is tagged.
   Fixes [RUSTSEC-2026-0459](https://rustsec.org/advisories/RUSTSEC-2026-0459)
   (CVE-2026-119375), which failed the `v0.2.0` release's `cargo deny` gate.
 
-## [0.2.0] — not tagged yet (SPEC-12 tags `v0.2.0`)
+## [0.2.0] — tagged, never published
+
+The `v0.2.0` release run failed `cargo deny` on RUSTSEC-2026-0459, so no assets were
+published; 0.3.0 is the first release carrying these changes.
 
 **This release intentionally breaks the v1 API** (SPEC-10, PR labelled
 `breaking-api-approved`). Cake Wallet is the only consumer and pins the tag. The
