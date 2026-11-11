@@ -2359,6 +2359,7 @@ impl SseDecode for crate::api::send_transaction::MultiSendTransactionDetails {
             <Vec<crate::api::send_transaction::SendRecipient>>::sse_decode(deserializer);
         let mut var_sendAll = <bool>::sse_decode(deserializer);
         let mut var_confirmationWindow = <Option<u64>>::sse_decode(deserializer);
+        let mut var_conflictsWithTransactionId = <Option<String>>::sse_decode(deserializer);
         return crate::api::send_transaction::MultiSendTransactionDetails {
             network: var_network,
             base_url: var_baseUrl,
@@ -2366,6 +2367,7 @@ impl SseDecode for crate::api::send_transaction::MultiSendTransactionDetails {
             recipients: var_recipients,
             send_all: var_sendAll,
             confirmation_window: var_confirmationWindow,
+            conflicts_with_transaction_id: var_conflictsWithTransactionId,
         };
     }
 }
@@ -3357,6 +3359,9 @@ impl flutter_rust_bridge::IntoDart for crate::api::send_transaction::MultiSendTr
             self.recipients.into_into_dart().into_dart(),
             self.send_all.into_into_dart().into_dart(),
             self.confirmation_window.into_into_dart().into_dart(),
+            self.conflicts_with_transaction_id
+                .into_into_dart()
+                .into_dart(),
         ]
         .into_dart()
     }
@@ -4150,6 +4155,7 @@ impl SseEncode for crate::api::send_transaction::MultiSendTransactionDetails {
         <Vec<crate::api::send_transaction::SendRecipient>>::sse_encode(self.recipients, serializer);
         <bool>::sse_encode(self.send_all, serializer);
         <Option<u64>>::sse_encode(self.confirmation_window, serializer);
+        <Option<String>>::sse_encode(self.conflicts_with_transaction_id, serializer);
     }
 }
 

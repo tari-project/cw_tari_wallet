@@ -617,6 +617,11 @@ struct FundedWallet {
 /// The fixture DB plus a restored seed-words wallet holding [`FUNDED_VALUES`], both
 /// unlocked. The recipient is the fixture's own (view-only) wallet.
 fn with_funded_wallet() -> FundedWallet {
+    with_funded_wallet_holding(&FUNDED_VALUES)
+}
+
+/// [`with_funded_wallet`] holding outputs of `values` instead.
+fn with_funded_wallet_holding(values: &[u64]) -> FundedWallet {
     let db = with_fixture_db();
     let db_path = db.db_path.clone();
 
@@ -627,7 +632,7 @@ fn with_funded_wallet() -> FundedWallet {
         Some(TariNetwork::Esmeralda),
     )
     .expect("restore_wallet");
-    fixture::add_spendable_outputs(&db_path, FUNDED, FUNDED_PASSPHRASE, &FUNDED_VALUES)
+    fixture::add_spendable_outputs(&db_path, FUNDED, FUNDED_PASSPHRASE, values)
         .expect("add outputs");
     db.unlock(FUNDED, FUNDED_PASSPHRASE)
         .expect("unlock the funded wallet");
@@ -649,6 +654,7 @@ fn funded_send(
         recipients,
         send_all,
         confirmation_window: None,
+        conflicts_with_transaction_id: None,
     }
 }
 
@@ -1141,6 +1147,7 @@ fn key_imported_wallet_sends_with_its_stored_keys() {
         }],
         send_all: false,
         confirmation_window: None,
+        conflicts_with_transaction_id: None,
     };
 
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -1569,6 +1576,312 @@ fn an_abandoned_send_mined_after_all_is_reported() {
     assert_eq!(events.iter().filter(|e| is_terminal(e)).count(), 1);
 }
 
+// ---------------------------------------------------------------------------
+// Paying again after an abandon: `conflicts_with_transaction_id`.
+// ---------------------------------------------------------------------------
+
+/// One Tari, in microTari.
+const T: u64 = 1_000_000;
+
+const NOT_AN_ABANDONED_SEND: &str =
+    "Wallet Error: The transaction to conflict with is not an abandoned send of this wallet";
+const NO_SPENDABLE_RELEASED_INPUT: &str = "Wallet Error: None of the abandoned send's inputs can be spent; check the wallet's transactions before paying again";
+
+/// A send of `amount` from `wallet_name` to the fixture wallet through a node that
+/// answers nothing, optionally conflicting with the abandoned send
+/// `conflicts_with`. Returns the streamed events, the result and the transaction
+/// that was broadcast, or the send's error.
+fn send_and_capture(
+    funded: &FundedWallet,
+    runtime: &tokio::runtime::Runtime,
+    wallet_name: &str,
+    amount: u64,
+    conflicts_with: Option<&str>,
+) -> anyhow::Result<(
+    Vec<SendTransactionEvent>,
+    SendResultDto,
+    tari_transaction_components::transaction_components::Transaction,
+)> {
+    let events = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let (sent, transaction) = runtime.block_on(async {
+        let server = wiremock::MockServer::start().await;
+        let details = MultiSendTransactionDetails {
+            wallet_name: wallet_name.to_string(),
+            conflicts_with_transaction_id: conflicts_with.map(str::to_string),
+            ..funded_send(
+                funded,
+                vec![SendRecipient {
+                    address: funded.recipient.clone(),
+                    amount,
+                    payment_id: None,
+                }],
+                false,
+                server.uri(),
+            )
+        };
+        let sink = events.clone();
+        let sent =
+            send_transaction_with_handler(details, move |event| sink.lock().unwrap().push(event))
+                .await?;
+        let requests = server.received_requests().await.expect("recorded requests");
+        let body: serde_json::Value =
+            serde_json::from_slice(&requests.first().expect("a broadcast").body).expect("json");
+        let transaction =
+            serde_json::from_value(body["params"]["transaction"].clone()).expect("transaction");
+        anyhow::Ok((sent, transaction))
+    })?;
+    let events = std::mem::take(&mut *events.lock().unwrap());
+    Ok((events, sent, transaction))
+}
+
+/// The error of a send that must be refused.
+fn refused<T>(result: anyhow::Result<T>) -> anyhow::Error {
+    match result {
+        Ok(_) => panic!("the send must be refused"),
+        Err(e) => e,
+    }
+}
+
+/// The output hashes `transaction` spends.
+fn input_hashes(
+    transaction: &tari_transaction_components::transaction_components::Transaction,
+) -> Vec<Vec<u8>> {
+    transaction
+        .body()
+        .inputs()
+        .iter()
+        .map(|input| input.output_hash().to_vec())
+        .collect()
+}
+
+/// The hash of `wallet_name`'s one output worth `value`.
+fn output_hash_of(funded: &FundedWallet, wallet_name: &str, value: u64) -> Vec<u8> {
+    let pool = minotari_wallet::db::init_db(funded.db.db_path.clone()).expect("pool");
+    let conn = pool.get().expect("conn");
+    let account = minotari_wallet::db::get_account_by_name(&conn, wallet_name)
+        .expect("account")
+        .expect("account exists");
+    conn.query_row(
+        "SELECT output_hash FROM outputs WHERE account_id = ?1 AND value = ?2 AND deleted_at IS NULL",
+        rusqlite::params![account.id, i64::try_from(value).expect("value")],
+        |row| row.get(0),
+    )
+    .expect("one output of that value")
+}
+
+/// Send `amount` from the funded wallet, let it stall and abandon it. Returns its id
+/// and the transaction that was broadcast.
+fn abandoned_send(
+    funded: &FundedWallet,
+    runtime: &tokio::runtime::Runtime,
+    amount: u64,
+) -> (
+    String,
+    tari_transaction_components::transaction_components::Transaction,
+) {
+    let (_, sent, transaction) =
+        send_and_capture(funded, runtime, FUNDED, amount, None).expect("send");
+    let tx_id = sent.transaction.id;
+    stall(funded, &tx_id);
+    runtime
+        .block_on(abandon_send(
+            FUNDED.to_string(),
+            FUNDED_PASSPHRASE.to_string(),
+            tx_id.clone(),
+        ))
+        .expect("abandon_send");
+    (tx_id, transaction)
+}
+
+/// A wallet holding 10 T and 3 T sends 3 T, which spends the 10; the send stalls and
+/// is abandoned, then the wallet receives 50 T. Paying again with
+/// `conflicts_with_transaction_id` spends the released 10, not the 50, so the resend
+/// shares an input with the original and the two can never both be mined.
+#[test]
+fn a_conflicting_resend_spends_the_abandoned_sends_released_input() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet_holding(&[10 * T, 3 * T]);
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let ten = output_hash_of(&funded, FUNDED, 10 * T);
+
+    let (original_id, original) = abandoned_send(&funded, &runtime, 3 * T);
+    assert_eq!(
+        input_hashes(&original),
+        vec![ten.clone()],
+        "the original spends the 10"
+    );
+
+    fixture::add_spendable_outputs(&funded.db.db_path, FUNDED, FUNDED_PASSPHRASE, &[50 * T])
+        .expect("receive 50 T");
+    let fifty = output_hash_of(&funded, FUNDED, 50 * T);
+
+    let (events, resent, resend) =
+        send_and_capture(&funded, &runtime, FUNDED, 3 * T, Some(&original_id)).expect("the resend");
+    let inputs = input_hashes(&resend);
+    assert!(inputs.contains(&ten), "the resend spends the released 10");
+    assert!(!inputs.contains(&fifty), "the resend does not spend the 50");
+    assert!(
+        inputs
+            .iter()
+            .any(|input| input_hashes(&original).contains(input)),
+        "the resend shares an input with the original"
+    );
+    assert_ne!(resent.transaction.id, original_id);
+
+    // The stream is a normal send's: same stages, `result` only on the last.
+    let stages: Vec<_> = events.iter().map(|e| format!("{:?}", e.stage)).collect();
+    assert_eq!(
+        stages,
+        [
+            "Initializing",
+            "ValidatingInput",
+            "ConnectingToNetwork",
+            "ConstructingTransaction",
+            "SigningKeyGeneration",
+            "SigningTransaction",
+            "Broadcasting",
+            "Broadcasted",
+        ]
+    );
+    let result = events
+        .last()
+        .and_then(|e| e.result.as_ref())
+        .expect("result");
+    assert_eq!(result.transaction.id, resent.transaction.id);
+}
+
+/// Control for the test above, documenting the double-pay hazard: the same resend
+/// **without** `conflicts_with_transaction_id` spends the 50 and shares no input with
+/// the original, so both can be mined.
+#[test]
+fn a_plain_resend_after_an_abandon_can_miss_the_released_input() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet_holding(&[10 * T, 3 * T]);
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+    let (_, original) = abandoned_send(&funded, &runtime, 3 * T);
+    fixture::add_spendable_outputs(&funded.db.db_path, FUNDED, FUNDED_PASSPHRASE, &[50 * T])
+        .expect("receive 50 T");
+    let fifty = output_hash_of(&funded, FUNDED, 50 * T);
+
+    let (_, _, resend) =
+        send_and_capture(&funded, &runtime, FUNDED, 3 * T, None).expect("the plain resend");
+    let inputs = input_hashes(&resend);
+    assert_eq!(inputs, vec![fifty], "plain selection picks the 50");
+    assert!(
+        !inputs
+            .iter()
+            .any(|input| input_hashes(&original).contains(input)),
+        "the plain resend shares no input with the original"
+    );
+}
+
+/// A `conflicts_with_transaction_id` that is not a number, not a send of the wallet,
+/// or a send that is not abandoned is refused before anything is reserved.
+#[test]
+fn a_resend_conflicting_with_a_send_that_is_not_abandoned_is_refused() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+    // Pending, not abandoned.
+    let (_, pending, _) = send_and_capture(&funded, &runtime, FUNDED, 100_000, None).expect("send");
+    let locked = get_balance(FUNDED.to_string()).unwrap().locked;
+    assert!(locked > 0);
+
+    for (id, expected) in [
+        (pending.transaction.id.as_str(), NOT_AN_ABANDONED_SEND),
+        ("999", NOT_AN_ABANDONED_SEND),
+        ("not-a-number", "Wallet Error: Invalid transaction id"),
+    ] {
+        let err = refused(send_and_capture(
+            &funded,
+            &runtime,
+            FUNDED,
+            100_000,
+            Some(id),
+        ));
+        assert_eq!(err.to_string(), expected, "{id}");
+    }
+
+    // Stalled but not abandoned yet.
+    stall(&funded, &pending.transaction.id);
+    let err = refused(send_and_capture(
+        &funded,
+        &runtime,
+        FUNDED,
+        100_000,
+        Some(&pending.transaction.id),
+    ));
+    assert_eq!(err.to_string(), NOT_AN_ABANDONED_SEND);
+    assert_eq!(
+        get_balance(FUNDED.to_string()).unwrap().locked,
+        locked,
+        "nothing more was reserved"
+    );
+}
+
+/// Another wallet's abandoned send is not one to conflict with.
+#[test]
+fn a_resend_conflicting_with_another_wallets_abandoned_send_is_refused() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+    restore_wallet(
+        "other".to_string(),
+        fixture::random_seed_words(),
+        "pw2".to_string(),
+        Some(TariNetwork::Esmeralda),
+    )
+    .expect("restore_wallet");
+    fixture::add_spendable_outputs(&funded.db.db_path, "other", "pw2", &FUNDED_VALUES)
+        .expect("fund");
+    funded.db.unlock("other", "pw2").expect("unlock");
+
+    let (abandoned_id, _) = abandoned_send(&funded, &runtime, 100_000);
+    let err = refused(send_and_capture(
+        &funded,
+        &runtime,
+        "other",
+        100_000,
+        Some(&abandoned_id),
+    ));
+    assert_eq!(err.to_string(), NOT_AN_ABANDONED_SEND);
+    assert_eq!(get_balance("other".to_string()).unwrap().locked, 0);
+}
+
+/// When every input the abandoned send released has been spent again (here by a plain
+/// send still pending), the original can no longer be mined and the resend is refused:
+/// the caller should check the wallet's transactions before paying again.
+#[test]
+fn a_resend_whose_released_inputs_are_all_spent_again_is_refused() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet_holding(&[10 * T, 3 * T]);
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let ten = output_hash_of(&funded, FUNDED, 10 * T);
+
+    let (original_id, _) = abandoned_send(&funded, &runtime, 3 * T);
+    let (_, _, plain) =
+        send_and_capture(&funded, &runtime, FUNDED, 3 * T, None).expect("a plain resend");
+    assert_eq!(input_hashes(&plain), vec![ten], "it spends the released 10");
+    let locked = get_balance(FUNDED.to_string()).unwrap().locked;
+
+    let err = refused(send_and_capture(
+        &funded,
+        &runtime,
+        FUNDED,
+        3 * T,
+        Some(&original_id),
+    ));
+    assert_eq!(err.to_string(), NO_SPENDABLE_RELEASED_INPUT);
+    assert_eq!(
+        get_balance(FUNDED.to_string()).unwrap().locked,
+        locked,
+        "nothing more was reserved"
+    );
+}
+
 /// A view-only wallet sending with its stored keys is refused before anything is
 /// locked.
 #[test]
@@ -1587,6 +1900,7 @@ fn view_only_wallet_cannot_send_with_stored_keys() {
         }],
         send_all: false,
         confirmation_window: None,
+        conflicts_with_transaction_id: None,
     };
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let err = runtime
