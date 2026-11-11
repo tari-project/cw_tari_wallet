@@ -36,10 +36,24 @@ diff) before the version is tagged.
 
 ## [Unreleased]
 
-## [0.3.0] — 2026-11-11
+## [0.3.1] — 2026-11-11
 
-First published release of the v0.2 API (`v0.2.0` was tagged but never published,
-see below), plus the additions and fixes listed here.
+First published release of the v0.2 API. `v0.2.0` and `v0.3.0` were tagged but never
+published; this release carries everything listed under 0.3.1, 0.3.0 and 0.2.0.
+
+### Fixed
+
+- The library builds on Windows again. A `#[cfg(unix)]` on the log file's open
+  options removed `FileRotate::new`'s last argument off Unix (E0061); Windows now
+  passes `None` (file-rotate's defaults), Unix keeps owner-only (0600) log files.
+- Release workflow: the Windows offline-build step skips agent programs the
+  firewall rejects as a rule program (the hosted runner's temp provisioner) with a
+  warning, instead of failing the job.
+
+## [0.3.0] — tagged, never published
+
+The `v0.3.0` release run failed on Windows (both fixes above), so no assets were
+published; 0.3.1 is the first release carrying these changes.
 
 ### Added (additive, SPEC-20)
 - `send_transaction_at_fee(sink, details, fee_per_gram)`: `send_transaction` built at
