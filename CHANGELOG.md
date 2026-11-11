@@ -195,6 +195,12 @@ Send stages:
 - New `make release-macos` / `release-linux` / `release-windows` targets; every
   `release-*` target now builds with `--locked` and defaults
   `TARI_TARGET_NETWORK` to `mainnet`.
+- The iOS framework no longer links the system SQLite (`-lsqlite3`): the library
+  already carries its own SQLite (`rusqlite` `bundled`), so the extra
+  `/usr/lib/libsqlite3.dylib` load command was unused. The framework also no
+  longer exports that bundled SQLite's `sqlite3*` symbols, so a by-name lookup
+  for the app's own SQLite (for example `DynamicLibrary.process()`) cannot
+  resolve to it. The FRB/Dart symbols are still exported.
 
 ### Added earlier in this release (SPEC-06)
 
