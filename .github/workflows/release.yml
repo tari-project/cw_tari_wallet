@@ -148,8 +148,16 @@ jobs:
             Where-Object { $_.Path -and $build -notcontains $_.ProcessName } |
             ForEach-Object Path | Sort-Object -Unique
           Write-Output "Allowed outbound while offline:" $runner
+          # Some of these are transient agent binaries the firewall rejects as a rule
+          # program (e.g. a temp provisioner with an 8.3 path and no .exe suffix); skip
+          # those with a warning rather than fail. The runner itself must get a rule.
           foreach ($program in $runner) {
-            New-NetFirewallRule -DisplayName release-offline -Direction Outbound -Action Allow -Program $program | Out-Null
+            try {
+              New-NetFirewallRule -DisplayName release-offline -Direction Outbound -Action Allow -Program $program -ErrorAction Stop | Out-Null
+            } catch {
+              if ($program -match '\\Runner\.(Listener|Worker)\.exe$') { throw }
+              Write-Warning "Not allowed outbound while offline (rule rejected): $program ($($_.Exception.Message))"
+            }
           }
           New-NetFirewallRule -DisplayName release-offline -Direction Outbound -Action Allow `
             -Program "$env:SystemRoot\System32\svchost.exe" -Protocol UDP -RemotePort 53 | Out-Null
