@@ -8,9 +8,9 @@ import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'transactions.dart';
 
-// These functions are ignored because they are not marked as `pub`: `build_unsigned_transaction`, `build_while_unlocked`, `confirm_own_payload`, `create_transaction_sender`, `map_signing_error`, `release_send_reservation`, `same_account`, `stored_key_manager`, `unlocked_in`, `validate_inputs`
+// These functions are ignored because they are not marked as `pub`: `abandon_warnings`, `build_unsigned_transaction`, `build_while_unlocked`, `confirm_own_payload`, `create_transaction_sender`, `map_signing_error`, `release_send_reservation`, `same_account`, `stored_key_manager`, `unlocked_in`, `validate_inputs`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ValidatedInputs`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `send_transaction_at_fee_with_handler`, `send_transaction_with_handler`
 
 /// Give up a stalled send and release its inputs.
@@ -32,7 +32,11 @@ import 'transactions.dart';
 /// as proof until later scans from a trusted node still show it rejected. If you pay
 /// the payee again, prefer a send that spends the same inputs, so it conflicts with
 /// the original instead of paying twice. minotari selects the largest outputs first,
-/// so a same-amount resend usually picks the released inputs again.
+/// so a same-amount resend usually picks the released inputs again, but nothing
+/// guarantees it. If the original is accepted or mined after all,
+/// [`get_abandon_warnings`] reports it (and the scan event that carries it lists it in
+/// `abandoned_then_mined_ids`): check it after each scan event and at startup, and
+/// warn the user that a payment made again may have paid twice.
 ///
 /// Errors: `Invalid Passphrase`, `No accounts found for this wallet`,
 /// `Wallet Error: Invalid transaction id`, `Wallet Error: The send has not stalled
@@ -49,6 +53,25 @@ Future<String> abandonSend(
         walletName: walletName,
         passphrase: passphrase,
         transactionId: transactionId);
+
+/// The sends of `wallet_name` that were accepted by a node or mined after the user
+/// abandoned them, one entry per send, ordered by `event_id`.
+///
+/// Read-only and offline: reads the wallet's stored events, so it needs a database
+/// path (`set_database_path` or `unlock_wallet`) but not an unlocked wallet, and it
+/// also sees what another process scanning the same database recorded. Call it at
+/// startup and after each `TransactionsReady` / `TransactionsUpdated` (whose
+/// `abandoned_then_mined_ids` flags the mined case as it is found). For a
+/// `MinedAfterAbandon` entry, warn the user that a send they abandoned was mined, so a
+/// payment made again since may have paid twice; nothing is done automatically. An
+/// entry is never withdrawn. Synchronous.
+///
+/// Errors: `Database is not initialized`, `No accounts found for this wallet`,
+/// `Database Error: …`.
+Future<List<AbandonWarningDto>> getAbandonWarnings(
+        {required String walletName}) =>
+    RustLib.instance.api
+        .crateApiSendTransactionGetAbandonWarnings(walletName: walletName);
 
 /// Pay one or more recipients in one transaction, or sweep the wallet to one
 /// recipient (`details.send_all`), streaming progress.
@@ -90,6 +113,47 @@ Stream<SendTransactionEvent> sendTransactionAtFee(
         required BigInt feePerGram}) =>
     RustLib.instance.api.crateApiSendTransactionSendTransactionAtFee(
         details: details, feePerGram: feePerGram);
+
+/// A send the user abandoned ([`abandon_send`]) that a node accepted or that was
+/// mined after all, from [`get_abandon_warnings`].
+///
+/// `transaction_id` is the send's `DisplayedTransactionDto.id`; `event_id` is the id
+/// of the wallet event that raised the warning (increasing over time, so an app can
+/// remember the highest one it has shown).
+class AbandonWarningDto {
+  final String transactionId;
+  final AbandonWarningKind kind;
+  final PlatformInt64 eventId;
+
+  const AbandonWarningDto({
+    required this.transactionId,
+    required this.kind,
+    required this.eventId,
+  });
+
+  @override
+  int get hashCode => transactionId.hashCode ^ kind.hashCode ^ eventId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AbandonWarningDto &&
+          runtimeType == other.runtimeType &&
+          transactionId == other.transactionId &&
+          kind == other.kind &&
+          eventId == other.eventId;
+}
+
+/// What happened to a send after the user abandoned it, in an [`AbandonWarningDto`].
+///
+/// `MinedAfterAbandon`: the send was mined after all, so a payment made again after
+/// the abandon may have paid the payee twice. `AcceptedAfterAbandon`: a node accepted
+/// a rebroadcast of it after the abandon (it may still be mined).
+enum AbandonWarningKind {
+  acceptedAfterAbandon,
+  minedAfterAbandon,
+  ;
+}
 
 /// Inputs to [`send_transaction`].
 ///

@@ -2085,6 +2085,7 @@ dependencies = [
  "r2d2",
  "r2d2_sqlite",
  "rand 0.10.3",
+ "serde_json",
  "tari_common",
  "tari_common_types",
  "tari_crypto",

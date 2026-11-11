@@ -34,9 +34,9 @@ use minotari_wallet_ffi::api::scanner::{
     ScanEventDto, ScanPriority,
 };
 use minotari_wallet_ffi::api::send_transaction::{
-    abandon_send, send_transaction_at_fee_with_handler, send_transaction_with_handler,
-    MultiSendTransactionDetails, SendRecipient, SendResultDto, SendTransactionEvent,
-    TransactionStage,
+    abandon_send, get_abandon_warnings, send_transaction_at_fee_with_handler,
+    send_transaction_with_handler, AbandonWarningKind, MultiSendTransactionDetails, SendRecipient,
+    SendResultDto, SendTransactionEvent, TransactionStage,
 };
 use minotari_wallet_ffi::api::signing::{sign_message, verify_message};
 use minotari_wallet_ffi::api::transactions::get_transactions;
@@ -529,7 +529,7 @@ fn rescan_of_a_locked_wallet_changes_nothing() {
 async fn mock_chain_node() -> wiremock::MockServer {
     let server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::any())
-        .respond_with(MockChain)
+        .respond_with(MockChain::default())
         .mount(&server)
         .await;
     server
@@ -1443,6 +1443,132 @@ fn abandon_send_refuses_an_accepted_send_that_has_not_stalled() {
     );
 }
 
+/// An abandoned send that is mined after all: the scan that finds its change output
+/// flags it in `abandoned_then_mined_ids`, and `get_abandon_warnings` reports it as
+/// `MinedAfterAbandon`. The scan's event set is unchanged.
+#[test]
+fn an_abandoned_send_mined_after_all_is_reported() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+    assert!(get_abandon_warnings(FUNDED.to_string())
+        .expect("no warnings yet")
+        .is_empty());
+    assert_eq!(
+        get_abandon_warnings("missing".to_string())
+            .unwrap_err()
+            .to_string(),
+        "No accounts found for this wallet"
+    );
+
+    // Send through a node that answers nothing, keeping the signed transaction.
+    let (sent, transaction) = runtime.block_on(async {
+        let server = wiremock::MockServer::start().await;
+        let details = funded_send(
+            &funded,
+            vec![SendRecipient {
+                address: funded.recipient.clone(),
+                amount: 100_000,
+                payment_id: None,
+            }],
+            false,
+            server.uri(),
+        );
+        let sent = send_transaction_with_handler(details, |_| {})
+            .await
+            .expect("send");
+        let requests = server.received_requests().await.expect("recorded requests");
+        let body: serde_json::Value =
+            serde_json::from_slice(&requests.first().expect("a broadcast").body).expect("json");
+        let transaction: tari_transaction_components::transaction_components::Transaction =
+            serde_json::from_value(body["params"]["transaction"].clone()).expect("transaction");
+        (sent, transaction)
+    });
+    let tx_id = sent.transaction.id;
+
+    stall(&funded, &tx_id);
+    runtime
+        .block_on(abandon_send(
+            FUNDED.to_string(),
+            FUNDED_PASSPHRASE.to_string(),
+            tx_id.clone(),
+        ))
+        .expect("abandon_send");
+    assert!(
+        get_abandon_warnings(FUNDED.to_string())
+            .expect("abandoned, not mined")
+            .is_empty(),
+        "an abandon alone is no warning"
+    );
+
+    // The original is mined anyway, in the block after the wallet's tip.
+    let events = std::sync::Arc::new(Mutex::new(Vec::new()));
+    runtime
+        .block_on(async {
+            let server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::any())
+                .respond_with(MockChain {
+                    mined: Some(transaction),
+                })
+                .mount(&server)
+                .await;
+            let sink = events.clone();
+            start_scan_with_handler(
+                create_scan_handle(FUNDED.to_string()).expect("handle"),
+                scan_config(FUNDED, server.uri()),
+                move |event| {
+                    sink.lock().unwrap().push(event);
+                    Ok(())
+                },
+            )
+            .await
+        })
+        .expect("start_scan");
+
+    let warnings = get_abandon_warnings(FUNDED.to_string()).expect("warnings");
+    assert_eq!(warnings.len(), 1, "got {warnings:?}");
+    assert_eq!(warnings[0].transaction_id, tx_id);
+    assert_eq!(warnings[0].kind, AbandonWarningKind::MinedAfterAbandon);
+    assert!(warnings[0].event_id > 0);
+
+    let events = events.lock().unwrap();
+    let flagged: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            ScanEventDto::TransactionsReady(e) => e.abandoned_then_mined_ids.clone(),
+            ScanEventDto::TransactionsUpdated(e) => e.abandoned_then_mined_ids.clone(),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            ScanEventDto::TransactionsReady(e)
+                if e.abandoned_then_mined_ids.as_deref() == Some(std::slice::from_ref(&tx_id))
+                    && e.transactions.iter().any(|t| t.id == tx_id)
+        )),
+        "the TransactionsReady carrying the mined send flags it, got {events:?}"
+    );
+    assert!(
+        flagged
+            .iter()
+            .all(|ids| ids == std::slice::from_ref(&tx_id)),
+        "only the abandoned send is flagged, got {flagged:?}"
+    );
+    assert!(
+        matches!(
+            events.last(),
+            Some(ScanEventDto::Completed {
+                final_height,
+                ..
+            }) if *final_height == MOCK_TIP + 1
+        ),
+        "got {events:?}"
+    );
+    assert_eq!(events.iter().filter(|e| is_terminal(e)).count(), 1);
+}
+
 /// A view-only wallet sending with its stored keys is refused before anything is
 /// locked.
 #[test]
@@ -1482,7 +1608,40 @@ fn view_only_wallet_cannot_send_with_stored_keys() {
 /// A mock base node whose chain runs to `MOCK_TIP` with no wallet outputs. Its tip
 /// matches the funded wallet's scanned tip, so a plain scan of that wallet resumes
 /// with nothing to do and only a rollback removes its outputs.
-struct MockChain;
+///
+/// With `mined` set, the chain has one more block, at `MOCK_TIP + 1`, holding that
+/// transaction (its outputs, and its inputs as spent output hashes).
+#[derive(Default)]
+struct MockChain {
+    mined: Option<tari_transaction_components::transaction_components::Transaction>,
+}
+
+impl MockChain {
+    fn tip(&self) -> u64 {
+        MOCK_TIP + u64::from(self.mined.is_some())
+    }
+
+    /// The outputs and spent output hashes of the block at `height`.
+    fn block_contents(
+        &self,
+        height: u64,
+    ) -> (
+        Vec<tari_transaction_components::transaction_components::TransactionOutput>,
+        Vec<Vec<u8>>,
+    ) {
+        match &self.mined {
+            Some(tx) if height == MOCK_TIP + 1 => (
+                tx.body().outputs().to_vec(),
+                tx.body()
+                    .inputs()
+                    .iter()
+                    .map(|input| input.output_hash().to_vec())
+                    .collect(),
+            ),
+            _ => (Vec::new(), Vec::new()),
+        }
+    }
+}
 
 const MOCK_TIP: u64 = fixture::FUNDED_TIP_HEIGHT as u64;
 
@@ -1502,16 +1661,19 @@ fn mock_query(request: &wiremock::Request, name: &str) -> String {
 impl wiremock::Respond for MockChain {
     fn respond(&self, request: &wiremock::Request) -> wiremock::ResponseTemplate {
         use tari_transaction_components::rpc::models::{
-            BlockUtxoInfo, SyncUtxosByBlockResponseV0, SyncUtxosByBlockResponseV1,
+            BlockUtxoInfo, GetUtxosByBlockResponse, MinimalUtxoSyncInfo,
+            SyncUtxosByBlockResponseV0, SyncUtxosByBlockResponseV1,
         };
         use tari_utilities::hex::from_hex;
+        use tari_utilities::ByteArray;
         use wiremock::ResponseTemplate;
 
+        let tip = self.tip();
         match request.url.path() {
             "/get_tip_info" => ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "metadata": {
-                    "best_block_height": MOCK_TIP,
-                    "best_block_hash": mock_block_hash(MOCK_TIP),
+                    "best_block_height": tip,
+                    "best_block_hash": mock_block_hash(tip),
                     "accumulated_difficulty": "0",
                     "pruned_height": 0,
                     "timestamp": 0,
@@ -1520,7 +1682,7 @@ impl wiremock::Respond for MockChain {
             "/get_height_at_time" => ResponseTemplate::new(200).set_body_json(0u64),
             "/get_header_by_height" => {
                 let height: u64 = mock_query(request, "height").parse().expect("height");
-                if height > MOCK_TIP {
+                if height > tip {
                     return ResponseTemplate::new(404);
                 }
                 ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -1533,17 +1695,31 @@ impl wiremock::Respond for MockChain {
                 let start_hash = from_hex(&mock_query(request, "start_header_hash")).expect("hex");
                 let start = u64::from_be_bytes(start_hash[0..8].try_into().expect("8 bytes"));
                 let limit: u64 = mock_query(request, "limit").parse().expect("limit");
-                let last = (start + limit - 1).min(MOCK_TIP);
+                let last = (start + limit - 1).min(tip);
                 let blocks = (start..=last)
-                    .map(|height| BlockUtxoInfo {
-                        header_hash: mock_block_hash(height),
-                        height,
-                        outputs: Vec::new(),
-                        inputs: Vec::new(),
-                        mined_timestamp: 1_700_000_000,
+                    .map(|height| {
+                        let (outputs, inputs) = self.block_contents(height);
+                        BlockUtxoInfo {
+                            header_hash: mock_block_hash(height),
+                            height,
+                            outputs: outputs
+                                .iter()
+                                .map(|output| MinimalUtxoSyncInfo {
+                                    output_hash: output.hash().to_vec(),
+                                    commitment: output.commitment.as_bytes().to_vec(),
+                                    encrypted_data: output.encrypted_data.to_byte_vec(),
+                                    sender_offset_public_key: output
+                                        .sender_offset_public_key
+                                        .as_bytes()
+                                        .to_vec(),
+                                })
+                                .collect(),
+                            inputs,
+                            mined_timestamp: 1_700_000_000,
+                        }
                     })
                     .collect();
-                let next_header_to_scan = if last < MOCK_TIP {
+                let next_header_to_scan = if last < tip {
                     mock_block_hash(last + 1)
                 } else {
                     Vec::new()
@@ -1555,6 +1731,17 @@ impl wiremock::Respond for MockChain {
                         next_header_to_scan,
                     },
                 ))
+            }
+            "/get_utxos_by_block" => {
+                let hash = from_hex(&mock_query(request, "header_hash")).expect("hex");
+                let height = u64::from_be_bytes(hash[0..8].try_into().expect("8 bytes"));
+                let (outputs, _) = self.block_contents(height);
+                ResponseTemplate::new(200).set_body_json(GetUtxosByBlockResponse {
+                    header_hash: hash,
+                    height,
+                    outputs,
+                    mined_timestamp: 1_700_000_000,
+                })
             }
             _ => ResponseTemplate::new(404),
         }

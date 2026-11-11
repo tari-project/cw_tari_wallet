@@ -45,6 +45,20 @@ diff) before the version is tagged.
   id `abandon_send` takes), `acceptedByNode`, `nodeReason` and `note`. Every other
   event has `result == null`; the event set, order and `details` texts are
   unchanged, and `TransactionStage` is untouched.
+- `get_abandon_warnings(walletName)` → `List<AbandonWarningDto>`: the wallet's sends
+  that were abandoned with `abandon_send` and then mined (`MinedAfterAbandon`) or
+  accepted by a node (`AcceptedAfterAbandon`) after all, one per send, ordered by
+  `eventId`. Read-only and offline (stored wallet events; no unlock needed). Errors:
+  `Database is not initialized`, `No accounts found for this wallet`,
+  `Database Error: …`.
+- `AbandonWarningDto { transactionId, kind, eventId }` and the plain enum
+  `AbandonWarningKind { acceptedAfterAbandon, minedAfterAbandon }`.
+- `TransactionsReadyDto.abandonedThenMinedIds` and
+  `TransactionsUpdatedDto.abandonedThenMinedIds` (`List<String>?`): the batch's
+  transaction ids that are abandoned sends mined after all, so a payment made again
+  may have paid twice. `null` when there are none or the lookup failed (logged; the
+  scan never fails for it). The scan's event set and order are unchanged and
+  `ScanEventDto` has no new variant.
 
 ## [0.3.1] — 2026-11-11
 

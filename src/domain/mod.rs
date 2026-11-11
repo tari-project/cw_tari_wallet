@@ -13,6 +13,7 @@
 //! their `From` impls — stays in `api`; `domain` only returns small internal value
 //! structs or `WalletError`.
 
+pub(crate) mod abandon;
 pub(crate) mod address;
 pub(crate) mod keys;
 pub(crate) mod text;

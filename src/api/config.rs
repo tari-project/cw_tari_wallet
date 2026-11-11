@@ -55,6 +55,10 @@ pub(crate) const BRIDGE_THREAD_POOL_SIZE: usize = 2;
 /// is cut on a char boundary and marked as truncated.
 pub(crate) const LOG_FIELD_MAX_BYTES: usize = 4096;
 
+/// Wallet events read per page when `get_abandon_warnings` (and the scan's
+/// `abandoned_then_mined_ids`) read an account's stored events.
+pub(crate) const ABANDON_EVENTS_PAGE_SIZE: i64 = 500;
+
 #[cfg(test)]
 mod tests {
     //! Value-pinning guards (Shared Contracts §4). These assert the *resolved* default
@@ -109,5 +113,10 @@ mod tests {
     #[test]
     fn log_field_max_bytes_is_4096() {
         assert_eq!(LOG_FIELD_MAX_BYTES, 4096);
+    }
+
+    #[test]
+    fn abandon_events_page_size_is_500() {
+        assert_eq!(ABANDON_EVENTS_PAGE_SIZE, 500);
     }
 }

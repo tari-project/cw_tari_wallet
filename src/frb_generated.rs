@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1397533534;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 680601818;
 
 // Section: executor
 
@@ -792,6 +792,42 @@ fn wire__crate__api__utils__format_micro_tari_impl(
                         Result::<_, ()>::Ok(crate::api::utils::format_micro_tari(api_micro_tari))?;
                     Ok(output_ok)
                 })())
+            }
+        },
+    )
+}
+fn wire__crate__api__send_transaction__get_abandon_warnings_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "get_abandon_warnings",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_wallet_name = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok =
+                            crate::api::send_transaction::get_abandon_warnings(api_wallet_name)?;
+                        Ok(output_ok)
+                    })(),
+                )
             }
         },
     )
@@ -1978,6 +2014,33 @@ impl SseDecode for String {
     }
 }
 
+impl SseDecode for crate::api::send_transaction::AbandonWarningDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_transactionId = <String>::sse_decode(deserializer);
+        let mut var_kind =
+            <crate::api::send_transaction::AbandonWarningKind>::sse_decode(deserializer);
+        let mut var_eventId = <i64>::sse_decode(deserializer);
+        return crate::api::send_transaction::AbandonWarningDto {
+            transaction_id: var_transactionId,
+            kind: var_kind,
+            event_id: var_eventId,
+        };
+    }
+}
+
+impl SseDecode for crate::api::send_transaction::AbandonWarningKind {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::send_transaction::AbandonWarningKind::AcceptedAfterAbandon,
+            1 => crate::api::send_transaction::AbandonWarningKind::MinedAfterAbandon,
+            _ => unreachable!("Invalid variant for AbandonWarningKind: {}", inner),
+        };
+    }
+}
+
 impl SseDecode for crate::api::balance::AccountBalanceDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2170,6 +2233,18 @@ impl SseDecode for Vec<String> {
         let mut ans_ = vec![];
         for idx_ in 0..len_ {
             ans_.push(<String>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::send_transaction::AbandonWarningDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = vec![];
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::send_transaction::AbandonWarningDto>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -2405,6 +2480,17 @@ impl SseDecode for Option<u64> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<u64>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<Vec<String>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<Vec<String>>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -2704,11 +2790,13 @@ impl SseDecode for crate::api::scanner::TransactionsReadyDto {
             <Vec<crate::api::transactions::DisplayedTransactionDto>>::sse_decode(deserializer);
         let mut var_blockHeight = <Option<u64>>::sse_decode(deserializer);
         let mut var_isInitialSync = <bool>::sse_decode(deserializer);
+        let mut var_abandonedThenMinedIds = <Option<Vec<String>>>::sse_decode(deserializer);
         return crate::api::scanner::TransactionsReadyDto {
             account_id: var_accountId,
             transactions: var_transactions,
             block_height: var_blockHeight,
             is_initial_sync: var_isInitialSync,
+            abandoned_then_mined_ids: var_abandonedThenMinedIds,
         };
     }
 }
@@ -2719,9 +2807,11 @@ impl SseDecode for crate::api::scanner::TransactionsUpdatedDto {
         let mut var_accountId = <i64>::sse_decode(deserializer);
         let mut var_updatedTransactions =
             <Vec<crate::api::transactions::DisplayedTransactionDto>>::sse_decode(deserializer);
+        let mut var_abandonedThenMinedIds = <Option<Vec<String>>>::sse_decode(deserializer);
         return crate::api::scanner::TransactionsUpdatedDto {
             account_id: var_accountId,
             updated_transactions: var_updatedTransactions,
+            abandoned_then_mined_ids: var_abandonedThenMinedIds,
         };
     }
 }
@@ -2816,55 +2906,61 @@ fn pde_ffi_dispatcher_primary_impl(
         ),
         18 => wire__crate__api__db__force_lock_wallet_impl(port, ptr, rust_vec_len, data_len),
         19 => wire__crate__api__utils__format_micro_tari_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__address__get_address_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__balance__get_balance_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__fee__get_fee_per_gram_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__height__get_height_at_time_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__wallet__get_seed_words_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__base_node__get_tip_info_impl(port, ptr, rust_vec_len, data_len),
-        26 => {
+        20 => wire__crate__api__send_transaction__get_abandon_warnings_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        21 => wire__crate__api__address__get_address_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__balance__get_balance_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__fee__get_fee_per_gram_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__height__get_height_at_time_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__wallet__get_seed_words_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__base_node__get_tip_info_impl(port, ptr, rust_vec_len, data_len),
+        27 => {
             wire__crate__api__transactions__get_transactions_impl(port, ptr, rust_vec_len, data_len)
         }
-        27 => wire__crate__api__wallet__import_view_only_wallet_impl(
+        28 => wire__crate__api__wallet__import_view_only_wallet_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        28 => wire__crate__api__wallet__import_wallet_from_keys_impl(
+        29 => wire__crate__api__wallet__import_wallet_from_keys_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        30 => wire__crate__api__base_node__is_node_synced_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__wallet__list_wallets_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__db__lock_wallet_impl(port, ptr, rust_vec_len, data_len),
-        34 => {
+        31 => wire__crate__api__base_node__is_node_synced_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__wallet__list_wallets_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__db__lock_wallet_impl(port, ptr, rust_vec_len, data_len),
+        35 => {
             wire__crate__api__logger__logger_config_default_impl(port, ptr, rust_vec_len, data_len)
         }
-        35 => wire__crate__api__wallet__rename_wallet_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__scanner__rescan_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__wallet__restore_wallet_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__wallet__reveal_seed_words_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__send_transaction__send_transaction_impl(
+        36 => wire__crate__api__wallet__rename_wallet_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__scanner__rescan_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__wallet__restore_wallet_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__wallet__reveal_seed_words_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__send_transaction__send_transaction_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        40 => wire__crate__api__send_transaction__send_transaction_at_fee_impl(
+        41 => wire__crate__api__send_transaction__send_transaction_at_fee_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        41 => wire__crate__api__db__set_database_path_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__signing__sign_message_impl(port, ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__scanner__start_scan_impl(port, ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__scanner__stop_scan_impl(port, ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__db__unlock_wallet_impl(port, ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__signing__verify_message_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__db__set_database_path_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__signing__sign_message_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__scanner__start_scan_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__scanner__stop_scan_impl(port, ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__db__unlock_wallet_impl(port, ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__signing__verify_message_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2892,9 +2988,9 @@ fn pde_ffi_dispatcher_sync_impl(
         9 => wire__crate__api__scanner__create_scan_handle_impl(ptr, rust_vec_len, data_len),
         11 => wire__crate__api__network__current_network_impl(ptr, rust_vec_len, data_len),
         13 => wire__crate__api__height__estimate_height_at_time_impl(ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__logger__init_logger_impl(ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__seeds__list_words_impl(ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__logger__set_log_level_impl(ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__logger__init_logger_impl(ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__seeds__list_words_impl(ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__logger__set_log_level_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2916,6 +3012,49 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<SensitiveSeeds>> for Sensitive
     }
 }
 
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::send_transaction::AbandonWarningDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.transaction_id.into_into_dart().into_dart(),
+            self.kind.into_into_dart().into_dart(),
+            self.event_id.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::send_transaction::AbandonWarningDto
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::send_transaction::AbandonWarningDto>
+    for crate::api::send_transaction::AbandonWarningDto
+{
+    fn into_into_dart(self) -> crate::api::send_transaction::AbandonWarningDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::send_transaction::AbandonWarningKind {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::AcceptedAfterAbandon => 0.into_dart(),
+            Self::MinedAfterAbandon => 1.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::send_transaction::AbandonWarningKind
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::send_transaction::AbandonWarningKind>
+    for crate::api::send_transaction::AbandonWarningKind
+{
+    fn into_into_dart(self) -> crate::api::send_transaction::AbandonWarningKind {
+        self
+    }
+}
 // Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::balance::AccountBalanceDto {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
@@ -3602,6 +3741,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::scanner::TransactionsReadyDto
             self.transactions.into_into_dart().into_dart(),
             self.block_height.into_into_dart().into_dart(),
             self.is_initial_sync.into_into_dart().into_dart(),
+            self.abandoned_then_mined_ids.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -3623,6 +3763,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::scanner::TransactionsUpdatedD
         [
             self.account_id.into_into_dart().into_dart(),
             self.updated_transactions.into_into_dart().into_dart(),
+            self.abandoned_then_mined_ids.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -3713,6 +3854,31 @@ impl SseEncode for String {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<u8>>::sse_encode(self.into_bytes(), serializer);
+    }
+}
+
+impl SseEncode for crate::api::send_transaction::AbandonWarningDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.transaction_id, serializer);
+        <crate::api::send_transaction::AbandonWarningKind>::sse_encode(self.kind, serializer);
+        <i64>::sse_encode(self.event_id, serializer);
+    }
+}
+
+impl SseEncode for crate::api::send_transaction::AbandonWarningKind {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::send_transaction::AbandonWarningKind::AcceptedAfterAbandon => 0,
+                crate::api::send_transaction::AbandonWarningKind::MinedAfterAbandon => 1,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
     }
 }
 
@@ -3883,6 +4049,16 @@ impl SseEncode for Vec<String> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <String>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::send_transaction::AbandonWarningDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::send_transaction::AbandonWarningDto>::sse_encode(item, serializer);
         }
     }
 }
@@ -4073,6 +4249,16 @@ impl SseEncode for Option<u64> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <u64>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<Vec<String>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <Vec<String>>::sse_encode(value, serializer);
         }
     }
 }
@@ -4327,6 +4513,7 @@ impl SseEncode for crate::api::scanner::TransactionsReadyDto {
         );
         <Option<u64>>::sse_encode(self.block_height, serializer);
         <bool>::sse_encode(self.is_initial_sync, serializer);
+        <Option<Vec<String>>>::sse_encode(self.abandoned_then_mined_ids, serializer);
     }
 }
 
@@ -4338,6 +4525,7 @@ impl SseEncode for crate::api::scanner::TransactionsUpdatedDto {
             self.updated_transactions,
             serializer,
         );
+        <Option<Vec<String>>>::sse_encode(self.abandoned_then_mined_ids, serializer);
     }
 }
 

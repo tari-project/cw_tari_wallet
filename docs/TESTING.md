@@ -44,6 +44,7 @@ alongside the colocated unit tests. The suite must stay green and hermetic.
 | `api/logger.rs` | `From<LogLevel> for LevelFilter` — all 6 variants. | Upstream-drift tripwire for `log::LevelFilter`. |
 | `api/fee.rs` | `From<FeePriority> for LibFeePriority` — all 3 variants. | Upstream-drift tripwire for `minotari`'s `FeePriority`. |
 | `api/transactions.rs` | `From` for `DisplayedTransactionDirection` (2), `DisplayedTransactionSource` (4), `DisplayedTransactionStatus` (7) — all variants. | Upstream-drift tripwires for the `minotari` transaction enums. |
+| `domain/abandon.rs` | Pairing stored wallet events into after-abandon warnings: abandoned then mined → `MinedAfterAbandon`; rejected for another reason then mined → none; abandoned, never mined → none; `TransactionAcceptedAfterAbandon` → `AcceptedAfterAbandon`; ordering by event id; the batch-id filter behind `abandoned_then_mined_ids`; every `WalletEventType` variant's role (exhaustive `match`). | Upstream-drift tripwire for `minotari`'s `WalletEventType`: a new variant fails the build until its role is decided. Tier A covers the real path (abandon, then a scan mines the original). |
 | `api/send_transaction.rs` | `validate_inputs`: rejects zero amount, rejects malformed recipient, accepts a good fixture, applies the `DEFAULT_CONFIRMATION_WINDOW` (3) default, and honours an explicit window. | Input validation is pure (no DB/network) and gates every send. |
 | `api/base_node.rs` | `check_node_health`: an unparseable `base_url` returns `Ok(false)` (never `Err`); reachability itself is `is_online`, covered hermetically by the Tier-B harness. `api/config.rs` value-guards pin `HEALTH_TIMEOUT_SECS` (5) and `HEALTH_MAX_RETRIES` (1). | The probe must map to a plain Dart `bool`; a bad URL is "not healthy", not an error. Pinned timeout/retry are the snappy "test connection" UX. |
 | `api/signing.rs` (over `minotari::signing`) | sign (through the session; `Wallet is locked` otherwise)/verify round-trip, tamper/wrong-key → false, malformed-input error strings, random-nonce non-determinism, frozen domain tag, reference cross-compat vector. | Off-chain message signing; the error strings + domain tag are contract. |
@@ -63,7 +64,8 @@ test.
   the resolved value or the signature.
 - **`network.rs::from_str_esme_is_alias_for_esmeralda`** — the `"esme"` alias maps to
   `Esmeralda`.
-- **The enum-mapping tests** (`logger`, `fee`, `transactions`, and
+- **The enum-mapping tests** (`logger`, `fee`, `transactions`,
+  `domain/abandon.rs::every_event_variant_has_a_decided_role`, and
   `tari_network_maps_to_lib_network_exhaustively`) — these are exhaustive on purpose.
   A `minotari`/`tari_common`/`log` bump that adds or renames a variant should break
   compilation or these tests, **not** silently mismap. When that happens, revisit the

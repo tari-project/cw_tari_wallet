@@ -1,6 +1,6 @@
 use crate::api::config::{
-    DEFAULT_BASE_URL, DEFAULT_CONFIRMATION_WINDOW, MAX_FEE_PER_GRAM, SECONDS_TO_LOCK_UTXO,
-    SEND_FEE_PER_GRAM,
+    ABANDON_EVENTS_PAGE_SIZE, DEFAULT_BASE_URL, DEFAULT_CONFIRMATION_WINDOW, MAX_FEE_PER_GRAM,
+    SECONDS_TO_LOCK_UTXO, SEND_FEE_PER_GRAM,
 };
 use crate::api::db::{
     blocking, get_db_connection, get_db_pool, is_unlocked, release_expired_reservations,
@@ -10,6 +10,7 @@ use crate::api::error::WalletError;
 use crate::api::network::{apply_network, parse_network, TariNetwork};
 use crate::api::scanner::{begin_maintenance, stop_wallet_scans};
 use crate::api::transactions::DisplayedTransactionDto;
+use crate::domain::abandon;
 use crate::domain::text::strip_format_chars;
 use crate::domain::validation::{
     validate_fee_per_gram, validate_recipient, validate_recipient_count,
@@ -17,8 +18,11 @@ use crate::domain::validation::{
 use crate::frb_generated::StreamSink;
 use anyhow::Result;
 use flutter_rust_bridge::frb;
-use minotari_wallet::db::{expire_and_unlock_pending_transaction, WalletDbError};
+use minotari_wallet::db::{
+    expire_and_unlock_pending_transaction, get_events_by_account_id, WalletDbError,
+};
 use minotari_wallet::get_accounts;
+use minotari_wallet::models::WalletEventType;
 use minotari_wallet::transactions::abandon::AbandonSendError;
 use minotari_wallet::transactions::manager::{FinalizedSend, TransactionSender};
 use minotari_wallet::transactions::one_sided_transaction::Recipient;
@@ -168,7 +172,11 @@ const NOT_STALLED: &str =
 /// as proof until later scans from a trusted node still show it rejected. If you pay
 /// the payee again, prefer a send that spends the same inputs, so it conflicts with
 /// the original instead of paying twice. minotari selects the largest outputs first,
-/// so a same-amount resend usually picks the released inputs again.
+/// so a same-amount resend usually picks the released inputs again, but nothing
+/// guarantees it. If the original is accepted or mined after all,
+/// [`get_abandon_warnings`] reports it (and the scan event that carries it lists it in
+/// `abandoned_then_mined_ids`): check it after each scan event and at startup, and
+/// warn the user that a payment made again may have paid twice.
 ///
 /// Errors: `Invalid Passphrase`, `No accounts found for this wallet`,
 /// `Wallet Error: Invalid transaction id`, `Wallet Error: The send has not stalled
@@ -231,6 +239,109 @@ pub async fn abandon_send(
     })
     .await?;
     Ok(abandoned.note().to_string())
+}
+
+/// What happened to a send after the user abandoned it, in an [`AbandonWarningDto`].
+///
+/// `MinedAfterAbandon`: the send was mined after all, so a payment made again after
+/// the abandon may have paid the payee twice. `AcceptedAfterAbandon`: a node accepted
+/// a rebroadcast of it after the abandon (it may still be mined).
+#[frb]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbandonWarningKind {
+    AcceptedAfterAbandon,
+    MinedAfterAbandon,
+}
+
+impl From<abandon::WarningKind> for AbandonWarningKind {
+    fn from(kind: abandon::WarningKind) -> Self {
+        match kind {
+            abandon::WarningKind::AcceptedAfterAbandon => Self::AcceptedAfterAbandon,
+            abandon::WarningKind::MinedAfterAbandon => Self::MinedAfterAbandon,
+        }
+    }
+}
+
+/// A send the user abandoned ([`abandon_send`]) that a node accepted or that was
+/// mined after all, from [`get_abandon_warnings`].
+///
+/// `transaction_id` is the send's `DisplayedTransactionDto.id`; `event_id` is the id
+/// of the wallet event that raised the warning (increasing over time, so an app can
+/// remember the highest one it has shown).
+#[frb]
+#[derive(Debug, Clone)]
+pub struct AbandonWarningDto {
+    pub transaction_id: String,
+    pub kind: AbandonWarningKind,
+    pub event_id: i64,
+}
+
+impl From<abandon::AbandonWarning> for AbandonWarningDto {
+    fn from(w: abandon::AbandonWarning) -> Self {
+        Self {
+            transaction_id: w.tx_id.to_string(),
+            kind: w.kind.into(),
+            event_id: w.event_id,
+        }
+    }
+}
+
+/// The sends of `wallet_name` that were accepted by a node or mined after the user
+/// abandoned them, one entry per send, ordered by `event_id`.
+///
+/// Read-only and offline: reads the wallet's stored events, so it needs a database
+/// path (`set_database_path` or `unlock_wallet`) but not an unlocked wallet, and it
+/// also sees what another process scanning the same database recorded. Call it at
+/// startup and after each `TransactionsReady` / `TransactionsUpdated` (whose
+/// `abandoned_then_mined_ids` flags the mined case as it is found). For a
+/// `MinedAfterAbandon` entry, warn the user that a send they abandoned was mined, so a
+/// payment made again since may have paid twice; nothing is done automatically. An
+/// entry is never withdrawn. Synchronous.
+///
+/// Errors: `Database is not initialized`, `No accounts found for this wallet`,
+/// `Database Error: …`.
+#[frb]
+pub fn get_abandon_warnings(wallet_name: String) -> Result<Vec<AbandonWarningDto>> {
+    let conn = get_db_connection()?;
+    let accounts = get_accounts(&conn, Some(&wallet_name))
+        .map_err(|e| WalletError::database(e.to_string()))?;
+    let account = accounts.first().ok_or(WalletError::NoAccounts)?;
+    Ok(abandon_warnings(&conn, account.id)?
+        .into_iter()
+        .map(Into::into)
+        .collect())
+}
+
+/// The after-abandon warnings of account `account_id`, from all its stored events.
+pub(crate) fn abandon_warnings(
+    conn: &r2d2_sqlite::rusqlite::Connection,
+    account_id: i64,
+) -> Result<Vec<abandon::AbandonWarning>> {
+    let mut events = Vec::new();
+    let mut offset = 0;
+    loop {
+        let page = get_events_by_account_id(conn, account_id, ABANDON_EVENTS_PAGE_SIZE, offset)
+            .map_err(|e| WalletError::database(e.to_string()))?;
+        let read = page.len();
+        for row in page {
+            // A row this build cannot read (e.g. a newer minotari's event) is no
+            // warning it knows of.
+            match row
+                .data_json
+                .as_deref()
+                .map(serde_json::from_str::<WalletEventType>)
+            {
+                Some(Ok(event)) => events.push((row.id, event)),
+                Some(Err(e)) => log::debug!("Skipping unreadable wallet event {}: {e}", row.id),
+                None => {}
+            }
+        }
+        if read < ABANDON_EVENTS_PAGE_SIZE as usize {
+            break;
+        }
+        offset += ABANDON_EVENTS_PAGE_SIZE;
+    }
+    Ok(abandon::pair_abandon_warnings(events))
 }
 
 /// Resolves `Ok` even when the node has not accepted the send yet: it is recorded and

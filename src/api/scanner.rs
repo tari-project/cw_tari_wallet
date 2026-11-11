@@ -11,10 +11,15 @@
 //! The `std::sync::RwLock` guard is **never held across an `.await`**.
 
 use crate::api::db::{
-    get_db_connection, get_db_path, release_expired_reservations, session_gone, unlocked_account,
+    blocking, get_db_connection, get_db_path, release_expired_reservations, session_gone,
+    unlocked_account,
 };
 use crate::api::error::WalletError;
-use crate::api::transactions::DisplayedTransactionDto;
+use crate::api::send_transaction::abandon_warnings;
+use crate::api::transactions::{
+    DisplayedTransactionDirection, DisplayedTransactionDto, DisplayedTransactionStatus,
+};
+use crate::domain::abandon;
 use crate::domain::text::strip_format_chars;
 use crate::frb_generated::StreamSink;
 use anyhow::{anyhow, Result};
@@ -378,6 +383,12 @@ fn is_terminal(event: &ScanEventDto) -> bool {
 ///
 /// `block_height` is the block they were found at (when known); `is_initial_sync`
 /// is `true` while catching up history versus live tip-following.
+///
+/// `abandoned_then_mined_ids` lists the `transactions` (by `id`) that are sends the
+/// user abandoned ([`abandon_send`](crate::api::send_transaction::abandon_send)) and
+/// that were mined after all: a payment made again since may have paid twice. `None`
+/// when there are none (or the check could not be made); see
+/// [`get_abandon_warnings`](crate::api::send_transaction::get_abandon_warnings).
 #[frb]
 #[derive(Debug, Clone)]
 pub struct TransactionsReadyDto {
@@ -385,6 +396,7 @@ pub struct TransactionsReadyDto {
     pub transactions: Vec<DisplayedTransactionDto>,
     pub block_height: Option<u64>,
     pub is_initial_sync: bool,
+    pub abandoned_then_mined_ids: Option<Vec<String>>,
 }
 
 impl From<DisplayedTransactionsEvent> for TransactionsReadyDto {
@@ -394,6 +406,7 @@ impl From<DisplayedTransactionsEvent> for TransactionsReadyDto {
             transactions: e.transactions.into_iter().map(Into::into).collect(),
             block_height: e.block_height,
             is_initial_sync: e.is_initial_sync,
+            abandoned_then_mined_ids: None,
         }
     }
 }
@@ -401,11 +414,15 @@ impl From<DisplayedTransactionsEvent> for TransactionsReadyDto {
 /// Status updates to already-known transactions (e.g. newly confirmed), carried
 /// inside [`ScanEventDto::TransactionsUpdated`]. This is how a send's confirmation is
 /// reported.
+///
+/// `abandoned_then_mined_ids` is as on [`TransactionsReadyDto`], for
+/// `updated_transactions`.
 #[frb]
 #[derive(Debug, Clone)]
 pub struct TransactionsUpdatedDto {
     pub account_id: i64,
     pub updated_transactions: Vec<DisplayedTransactionDto>,
+    pub abandoned_then_mined_ids: Option<Vec<String>>,
 }
 
 impl From<TransactionsUpdatedEvent> for TransactionsUpdatedDto {
@@ -413,6 +430,59 @@ impl From<TransactionsUpdatedEvent> for TransactionsUpdatedDto {
         Self {
             account_id: e.account_id,
             updated_transactions: e.updated_transactions.into_iter().map(Into::into).collect(),
+            abandoned_then_mined_ids: None,
+        }
+    }
+}
+
+/// `dto` with `abandoned_then_mined_ids` filled in for a transactions event; any
+/// other event as it is. Best-effort: a failed lookup is logged and leaves `None`, and
+/// never fails the scan.
+async fn with_abandon_hint(dto: ScanEventDto) -> ScanEventDto {
+    match dto {
+        ScanEventDto::TransactionsReady(mut e) => {
+            e.abandoned_then_mined_ids = abandon_hint(e.account_id, &e.transactions).await;
+            ScanEventDto::TransactionsReady(e)
+        }
+        ScanEventDto::TransactionsUpdated(mut e) => {
+            e.abandoned_then_mined_ids = abandon_hint(e.account_id, &e.updated_transactions).await;
+            ScanEventDto::TransactionsUpdated(e)
+        }
+        other => other,
+    }
+}
+
+/// The ids among `transactions` with a `MinedAfterAbandon` warning, or `None`.
+///
+/// Only an outgoing transaction that is not rejected can be an abandoned send that
+/// was mined, so a batch with none is not looked up.
+async fn abandon_hint(
+    account_id: i64,
+    transactions: &[DisplayedTransactionDto],
+) -> Option<Vec<String>> {
+    let candidates: Vec<String> = transactions
+        .iter()
+        .filter(|t| {
+            matches!(t.direction, DisplayedTransactionDirection::Outgoing)
+                && !matches!(t.status, DisplayedTransactionStatus::Rejected)
+        })
+        .map(|t| t.id.clone())
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    let warnings = blocking(move || {
+        let conn = get_db_connection()?;
+        abandon_warnings(&conn, account_id)
+    })
+    .await;
+    match warnings {
+        Ok(warnings) => {
+            abandon::abandoned_then_mined_ids(&warnings, candidates.iter().map(String::as_str))
+        }
+        Err(e) => {
+            log::warn!("Could not check the scanned transactions for abandoned sends: {e}");
+            None
         }
     }
 }
@@ -447,7 +517,9 @@ pub struct ScanConfiguration {
 }
 
 /// The event-forwarder loop: delivers every non-terminal event to `callback`, in
-/// order, and returns the scan's terminal event for the caller to send last.
+/// order, and returns the scan's terminal event for the caller to send last. A
+/// transactions event gets its `abandoned_then_mined_ids` first (a short database
+/// read; the block's writes are committed before minotari sends its events).
 ///
 /// It reads until the scanner drops its sender, also after a cancel: with a bounded
 /// `event_buffer` the scanner waits for room to send its terminal event, so the reader
@@ -472,7 +544,11 @@ where
             terminal = Some(dto);
             continue;
         }
-        if sink_open && callback(dto).is_err() {
+        if !sink_open {
+            continue;
+        }
+        let dto = with_abandon_hint(dto).await;
+        if callback(dto).is_err() {
             sink_open = false;
             cancel_token.cancel();
         }

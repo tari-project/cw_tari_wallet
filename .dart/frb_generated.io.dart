@@ -71,6 +71,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String dco_decode_String(dynamic raw);
 
   @protected
+  AbandonWarningDto dco_decode_abandon_warning_dto(dynamic raw);
+
+  @protected
+  AbandonWarningKind dco_decode_abandon_warning_kind(dynamic raw);
+
+  @protected
   AccountBalanceDto dco_decode_account_balance_dto(dynamic raw);
 
   @protected
@@ -166,6 +172,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<String> dco_decode_list_String(dynamic raw);
 
   @protected
+  List<AbandonWarningDto> dco_decode_list_abandon_warning_dto(dynamic raw);
+
+  @protected
   List<DisplayedTransactionDto> dco_decode_list_displayed_transaction_dto(
       dynamic raw);
 
@@ -223,6 +232,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw);
+
+  @protected
+  List<String>? dco_decode_opt_list_String(dynamic raw);
 
   @protected
   ReorgDetectedDto dco_decode_reorg_detected_dto(dynamic raw);
@@ -321,6 +333,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String sse_decode_String(SseDeserializer deserializer);
+
+  @protected
+  AbandonWarningDto sse_decode_abandon_warning_dto(
+      SseDeserializer deserializer);
+
+  @protected
+  AbandonWarningKind sse_decode_abandon_warning_kind(
+      SseDeserializer deserializer);
 
   @protected
   AccountBalanceDto sse_decode_account_balance_dto(
@@ -428,6 +448,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<String> sse_decode_list_String(SseDeserializer deserializer);
 
   @protected
+  List<AbandonWarningDto> sse_decode_list_abandon_warning_dto(
+      SseDeserializer deserializer);
+
+  @protected
   List<DisplayedTransactionDto> sse_decode_list_displayed_transaction_dto(
       SseDeserializer deserializer);
 
@@ -491,6 +515,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer);
+
+  @protected
+  List<String>? sse_decode_opt_list_String(SseDeserializer deserializer);
 
   @protected
   ReorgDetectedDto sse_decode_reorg_detected_dto(SseDeserializer deserializer);
@@ -594,6 +621,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_String(String self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_abandon_warning_dto(
+      AbandonWarningDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_abandon_warning_kind(
+      AbandonWarningKind self, SseSerializer serializer);
 
   @protected
   void sse_encode_account_balance_dto(
@@ -703,6 +738,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_abandon_warning_dto(
+      List<AbandonWarningDto> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_displayed_transaction_dto(
       List<DisplayedTransactionDto> self, SseSerializer serializer);
 
@@ -769,6 +808,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_list_String(List<String>? self, SseSerializer serializer);
 
   @protected
   void sse_encode_reorg_detected_dto(
