@@ -64,8 +64,10 @@ pub struct FeeEstimate {
 /// `base_url` is the base node RPC endpoint and `wallet_name` selects the funding
 /// account. Requires
 /// a database path (`set_database_path` or `unlock_wallet`) first. Async;
-/// performs network I/O. Errors if estimation fails or no estimate matches the
-/// requested priority.
+/// performs network I/O. The rate is [`get_fee_per_gram`]'s for `priority` (a node that
+/// gives no fee statistics gets minotari's defaults). Errors with `Failed to estimate
+/// fees` if `base_url` is unusable, the wallet is not found, or its balance cannot cover
+/// `amount` plus the fee.
 #[frb]
 pub async fn estimate_transaction_fee(
     amount: u64,
@@ -177,10 +179,12 @@ fn rate_for(
 }
 
 /// minotari's `FeeEstimator::estimate_fees` for one `priority`, except that the node's
-/// rates are capped at [`MAX_FEE_PER_GRAM`] before inputs are selected, so a wallet that
-/// can pay at the cap gets a quote. Kept step for step with upstream (pinned against it in
-/// the verify harness): at or below the cap the estimate is upstream's. The node is asked
-/// first, so no database connection is held while it answers.
+/// rates go through [`sane_rates`] (capped at [`MAX_FEE_PER_GRAM`], Medium and Fast at
+/// least 5, Slow <= Medium <= Fast) before inputs are selected, so a wallet that can pay
+/// at the cap gets a quote. Otherwise kept step for step with upstream (pinned against it
+/// in the verify harness): for node rates already within those bounds the estimate is
+/// upstream's. The node is asked first, so no database connection is held while it
+/// answers.
 async fn capped_estimate(
     pool: SqlitePool,
     base_url: &str,

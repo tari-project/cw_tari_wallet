@@ -15,8 +15,10 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 /// `base_url` is the base node RPC endpoint and `wallet_name` selects the funding
 /// account. Requires
 /// a database path (`set_database_path` or `unlock_wallet`) first. Async;
-/// performs network I/O. Errors if estimation fails or no estimate matches the
-/// requested priority.
+/// performs network I/O. The rate is [`get_fee_per_gram`]'s for `priority` (a node that
+/// gives no fee statistics gets minotari's defaults). Errors with `Failed to estimate
+/// fees` if `base_url` is unusable, the wallet is not found, or its balance cannot cover
+/// `amount` plus the fee.
 Future<FeeEstimate> estimateTransactionFee(
         {required BigInt amount,
         required FeePriority priority,
