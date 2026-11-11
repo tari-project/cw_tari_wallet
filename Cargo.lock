@@ -1992,7 +1992,7 @@ dependencies = [
 [[package]]
 name = "minotari-scanning"
 version = "0.6.0"
-source = "git+https://github.com/tari-project/minotari-cli.git?rev=60aa0be35141e1cefe2e8f33cc2c524ae9b6b77e#60aa0be35141e1cefe2e8f33cc2c524ae9b6b77e"
+source = "git+https://github.com/tari-project/minotari-cli.git?rev=6743f501ffc51eaa6c7a683bfbb5fc5db7c9cd0d#6743f501ffc51eaa6c7a683bfbb5fc5db7c9cd0d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2024,7 +2024,7 @@ dependencies = [
 [[package]]
 name = "minotari-wallet-core"
 version = "0.6.0"
-source = "git+https://github.com/tari-project/minotari-cli.git?rev=60aa0be35141e1cefe2e8f33cc2c524ae9b6b77e#60aa0be35141e1cefe2e8f33cc2c524ae9b6b77e"
+source = "git+https://github.com/tari-project/minotari-cli.git?rev=6743f501ffc51eaa6c7a683bfbb5fc5db7c9cd0d#6743f501ffc51eaa6c7a683bfbb5fc5db7c9cd0d"
 dependencies = [
  "anyhow",
  "argon2",

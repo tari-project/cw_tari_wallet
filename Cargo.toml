@@ -34,7 +34,7 @@ fern = { version = "0.7.1", features = ["meta-logging-in-format"] }
 file-rotate = "0.8.0"
 flutter_rust_bridge = "=2.11.1"
 log = { version = "0.4.29", features = ["kv"] }
-minotari-wallet = { package = "minotari-wallet-core", git = "https://github.com/tari-project/minotari-cli.git", rev = "60aa0be35141e1cefe2e8f33cc2c524ae9b6b77e", default-features = false, features = ["http"] }
+minotari-wallet = { package = "minotari-wallet-core", git = "https://github.com/tari-project/minotari-cli.git", rev = "6743f501ffc51eaa6c7a683bfbb5fc5db7c9cd0d", default-features = false, features = ["http"] }
 once_cell = "1.21.3"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.36.0"

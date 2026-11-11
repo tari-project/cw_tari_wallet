@@ -20,7 +20,7 @@ use anyhow::Result;
 use flutter_rust_bridge::frb;
 use minotari_wallet::db::{
     expire_and_unlock_pending_transaction, fetch_unspent_outputs, get_events_by_account_id,
-    get_latest_scanned_tip_block_by_account, WalletDbError,
+    get_latest_scanned_tip_block_by_account, get_output_by_id, WalletDbError,
 };
 use minotari_wallet::get_accounts;
 use minotari_wallet::models::WalletEventType;
@@ -770,10 +770,7 @@ fn resolve_conflict(
 
     let mut original_inputs = Vec::with_capacity(released.len());
     for output_id in &released {
-        original_inputs.push(
-            output_hash(conn, account_id, *output_id)
-                .map_err(|e| WalletError::database(e.to_string()))?,
-        );
+        original_inputs.push(output_hash(conn, account_id, *output_id)?);
     }
     Ok(Conflict {
         required_inputs,
@@ -781,18 +778,19 @@ fn resolve_conflict(
     })
 }
 
-/// The output hash of account `account_id`'s output `output_id`. (Read directly:
-/// minotari's `get_output_by_id` cannot map every stored `created_at`.)
+/// The output hash of account `account_id`'s output `output_id`.
 fn output_hash(
     conn: &r2d2_sqlite::rusqlite::Connection,
     account_id: i64,
     output_id: i64,
-) -> r2d2_sqlite::rusqlite::Result<Vec<u8>> {
-    conn.query_row(
-        "SELECT output_hash FROM outputs WHERE id = ?1 AND account_id = ?2",
-        [output_id, account_id],
-        |row| row.get(0),
-    )
+) -> Result<Vec<u8>, WalletError> {
+    match get_output_by_id(conn, output_id) {
+        Ok(Some(output)) if output.account_id == account_id => Ok(output.output_hash),
+        Ok(_) => Err(WalletError::database(format!(
+            "output {output_id} not found"
+        ))),
+        Err(e) => Err(WalletError::database(e.to_string())),
+    }
 }
 
 /// Defence in depth before signing: the built transaction must spend at least one

@@ -75,10 +75,11 @@ diff) before the version is tagged.
 
 ### Changed
 
-- Bumped `minotari-wallet-core` to minotari-cli `60aa0be` (the merge of
+- Bumped `minotari-wallet-core` to minotari-cli `6743f50`. That includes
   tari-project/minotari-cli#180, which lets a send require specific inputs and lists
-  an abandoned send's inputs). The `tari_*` crates stay at `=6.3.0-pre.4`. No change
-  to the bridge.
+  an abandoned send's inputs, and #181, which fixes `get_output_by_id` and
+  `get_input_by_id` failing on stored timestamps. The `tari_*` crates stay at
+  `=6.3.0-pre.4`.
 
 ## [0.3.1] — 2026-11-11
 
