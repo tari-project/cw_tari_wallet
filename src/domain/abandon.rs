@@ -8,6 +8,11 @@
 //! already in flight when the abandon committed persists
 //! `TransactionAcceptedAfterAbandon`. Neither reaches Dart as such, so the bridge
 //! reads them back from the events table and pairs them here.
+//!
+//! Also the pure checks behind a resend that conflicts with an abandoned send
+//! (`MultiSendTransactionDetails.conflicts_with_transaction_id`): which released
+//! inputs it must spend, and whether the built transaction shares one with the
+//! original.
 
 use minotari_wallet::models::WalletEventType;
 use minotari_wallet::transactions::abandon::ABANDONED_REASON;
@@ -148,6 +153,26 @@ pub(crate) fn abandoned_then_mined_ids<'a>(
         .map(str::to_string)
         .collect();
     (!ids.is_empty()).then_some(ids)
+}
+
+/// The released inputs of an abandoned send (`released`, `outputs` row ids in the
+/// original's input order) that are among `spendable` (the wallet's spendable output
+/// ids), in `released` order without repeats. A resend that conflicts with the
+/// abandoned send requires all of them.
+pub(crate) fn spendable_released_inputs(released: &[i64], spendable: &[i64]) -> Vec<i64> {
+    let spendable: BTreeSet<i64> = spendable.iter().copied().collect();
+    let mut seen = BTreeSet::new();
+    released
+        .iter()
+        .copied()
+        .filter(|id| spendable.contains(id) && seen.insert(*id))
+        .collect()
+}
+
+/// Whether a transaction spending the outputs with hashes `inputs` spends at least
+/// one of `original_inputs`: then it and the original can never both be mined.
+pub(crate) fn shares_an_input<T: PartialEq>(inputs: &[T], original_inputs: &[T]) -> bool {
+    inputs.iter().any(|input| original_inputs.contains(input))
 }
 
 #[cfg(test)]
@@ -386,5 +411,26 @@ mod tests {
     #[test]
     fn the_abandon_reason_is_upstreams() {
         assert_eq!(ABANDONED_REASON, "abandoned by user");
+    }
+
+    #[test]
+    fn spendable_released_inputs_keeps_released_order_and_drops_the_rest() {
+        assert_eq!(
+            spendable_released_inputs(&[7, 3, 9], &[9, 1, 7]),
+            vec![7, 9]
+        );
+        assert_eq!(spendable_released_inputs(&[7, 7, 3], &[3, 7]), vec![7, 3]);
+        assert!(spendable_released_inputs(&[7, 3], &[1, 2]).is_empty());
+        assert!(spendable_released_inputs(&[], &[1, 2]).is_empty());
+        assert!(spendable_released_inputs(&[1], &[]).is_empty());
+    }
+
+    #[test]
+    fn one_shared_input_is_a_conflict() {
+        assert!(shares_an_input(&[1, 2], &[2, 3]));
+        assert!(shares_an_input(&[3], &[2, 3]));
+        assert!(!shares_an_input(&[1, 4], &[2, 3]));
+        assert!(!shares_an_input::<u8>(&[], &[2, 3]));
+        assert!(!shares_an_input(&[1], &[]));
     }
 }

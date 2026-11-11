@@ -59,6 +59,19 @@ diff) before the version is tagged.
   may have paid twice. `null` when there are none or the lookup failed (logged; the
   scan never fails for it). The scan's event set and order are unchanged and
   `ScanEventDto` has no new variant.
+- `MultiSendTransactionDetails.conflictsWithTransactionId` (`String?`, last field):
+  pay again after `abandon_send` so the new send and the abandoned one can never both
+  be mined. Set it to the abandoned send's id; the send then spends every input the
+  abandon released that is still spendable (topped up as needed) and is checked before
+  signing to share at least one with the original. Works with `send_transaction` and
+  `send_transaction_at_fee`, normal sends and send-all; the stream (including
+  `result`) is unchanged. `null` sends exactly as before. New refusals, all before
+  anything is reserved except the last: `Wallet Error: The transaction to conflict
+  with is not an abandoned send of this wallet`, `Wallet Error: None of the abandoned
+  send's inputs can be spent; check the wallet's transactions before paying again`
+  and `Wallet Error: The resend does not conflict with the abandoned send` (its
+  reservation is released); a malformed id gives the existing `Wallet Error: Invalid
+  transaction id`. The `abandon_send` docs now say to pay again only this way.
 
 ### Changed
 

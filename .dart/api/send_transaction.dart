@@ -8,8 +8,8 @@ import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'transactions.dart';
 
-// These functions are ignored because they are not marked as `pub`: `abandon_warnings`, `build_unsigned_transaction`, `build_while_unlocked`, `confirm_own_payload`, `create_transaction_sender`, `map_signing_error`, `release_send_reservation`, `same_account`, `stored_key_manager`, `unlocked_in`, `validate_inputs`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ValidatedInputs`
+// These functions are ignored because they are not marked as `pub`: `abandon_warnings`, `build_unsigned_transaction`, `build_while_unlocked`, `confirm_own_payload`, `create_transaction_sender`, `ensure_conflicts`, `map_signing_error`, `output_hash`, `parse_transaction_id`, `release_send_reservation`, `resolve_conflict`, `same_account`, `stored_key_manager`, `unlocked_in`, `validate_inputs`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `Conflict`, `ValidatedInputs`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `send_transaction_at_fee_with_handler`, `send_transaction_with_handler`
 
@@ -29,11 +29,13 @@ import 'transactions.dart';
 ///
 /// The original can still be mined if a node holds it. Right after an abandon,
 /// `Rejected` means "not known to be mined", not "will not be mined": do not treat it
-/// as proof until later scans from a trusted node still show it rejected. If you pay
-/// the payee again, prefer a send that spends the same inputs, so it conflicts with
-/// the original instead of paying twice. minotari selects the largest outputs first,
-/// so a same-amount resend usually picks the released inputs again, but nothing
-/// guarantees it. If the original is accepted or mined after all,
+/// as proof until later scans from a trusted node still show it rejected. Pay the
+/// payee again **only** with a send whose
+/// [`MultiSendTransactionDetails::conflicts_with_transaction_id`] is this
+/// `transaction_id`: that send spends the released inputs, so it and the original can
+/// never both be mined. Whichever is mined first invalidates the other, and the scan
+/// reports the loser as rejected. A send without it selects inputs on its own and can
+/// pay twice. If the original is accepted or mined after all,
 /// [`get_abandon_warnings`] reports it (and the scan event that carries it lists it in
 /// `abandoned_then_mined_ids`): check it after each scan event and at startup, and
 /// warn the user that a payment made again may have paid twice.
@@ -166,6 +168,23 @@ enum AbandonWarningKind {
 /// (`None` → 3). With `send_all` set, `recipients` must hold exactly one entry and it
 /// receives every spendable output less the fee; quote that first with
 /// [`estimate_send_all_fee`](crate::api::fee::estimate_send_all_fee).
+///
+/// `conflicts_with_transaction_id` is for paying again after [`abandon_send`]: set it
+/// to the abandoned send's id (the `transaction_id` given to `abandon_send`), and pay
+/// the payee again **only** this way. The send then spends every input the abandoned
+/// send released that is still spendable (topped up from other outputs as needed), so
+/// it and the original can never both be mined: whichever is mined first invalidates
+/// the other, and the scan reports the loser as rejected. It is refused, before any
+/// UTXO is reserved, with `Wallet Error: Invalid transaction id` (not a number),
+/// `Wallet Error: The transaction to conflict with is not an abandoned send of this
+/// wallet` (unknown, another wallet's, not abandoned, or abandoned and since mined) or
+/// `Wallet Error: None of the abandoned send's inputs can be spent; check the wallet's
+/// transactions before paying again` (each was spent elsewhere, so the original can no
+/// longer be mined, or is held by another pending send), or `Wallet Error: …` with
+/// minotari's reason if the abandoned send's stored transaction cannot be read; and,
+/// as a final check before signing, with `Wallet Error: The resend does not conflict
+/// with the abandoned send` (its reservation is released). `None` sends exactly as
+/// before.
 class MultiSendTransactionDetails {
   final TariNetwork? network;
   final String? baseUrl;
@@ -173,6 +192,7 @@ class MultiSendTransactionDetails {
   final List<SendRecipient> recipients;
   final bool sendAll;
   final BigInt? confirmationWindow;
+  final String? conflictsWithTransactionId;
 
   const MultiSendTransactionDetails({
     this.network,
@@ -181,6 +201,7 @@ class MultiSendTransactionDetails {
     required this.recipients,
     required this.sendAll,
     this.confirmationWindow,
+    this.conflictsWithTransactionId,
   });
 
   @override
@@ -190,7 +211,8 @@ class MultiSendTransactionDetails {
       walletName.hashCode ^
       recipients.hashCode ^
       sendAll.hashCode ^
-      confirmationWindow.hashCode;
+      confirmationWindow.hashCode ^
+      conflictsWithTransactionId.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -202,7 +224,8 @@ class MultiSendTransactionDetails {
           walletName == other.walletName &&
           recipients == other.recipients &&
           sendAll == other.sendAll &&
-          confirmationWindow == other.confirmationWindow;
+          confirmationWindow == other.confirmationWindow &&
+          conflictsWithTransactionId == other.conflictsWithTransactionId;
 }
 
 /// One payee of a [`send_transaction`].

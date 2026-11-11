@@ -2045,8 +2045,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 7)
+      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
     return MultiSendTransactionDetails(
       network: dco_decode_opt_box_autoadd_tari_network(arr[0]),
       baseUrl: dco_decode_opt_String(arr[1]),
@@ -2054,6 +2054,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       recipients: dco_decode_list_send_recipient(arr[3]),
       sendAll: dco_decode_bool(arr[4]),
       confirmationWindow: dco_decode_opt_box_autoadd_u_64(arr[5]),
+      conflictsWithTransactionId: dco_decode_opt_String(arr[6]),
     );
   }
 
@@ -2850,13 +2851,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_recipients = sse_decode_list_send_recipient(deserializer);
     var var_sendAll = sse_decode_bool(deserializer);
     var var_confirmationWindow = sse_decode_opt_box_autoadd_u_64(deserializer);
+    var var_conflictsWithTransactionId = sse_decode_opt_String(deserializer);
     return MultiSendTransactionDetails(
         network: var_network,
         baseUrl: var_baseUrl,
         walletName: var_walletName,
         recipients: var_recipients,
         sendAll: var_sendAll,
-        confirmationWindow: var_confirmationWindow);
+        confirmationWindow: var_confirmationWindow,
+        conflictsWithTransactionId: var_conflictsWithTransactionId);
   }
 
   @protected
@@ -3685,6 +3688,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_list_send_recipient(self.recipients, serializer);
     sse_encode_bool(self.sendAll, serializer);
     sse_encode_opt_box_autoadd_u_64(self.confirmationWindow, serializer);
+    sse_encode_opt_String(self.conflictsWithTransactionId, serializer);
   }
 
   @protected

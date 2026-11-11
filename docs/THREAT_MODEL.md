@@ -86,10 +86,17 @@ same trusted node.
 it: a transaction kernel has no expiry, so any node or party holding the signed
 original can still get it mined for as long as all its inputs stay unspent. A
 payment made again after the abandon conflicts with the original only if it spends
-at least one of the same inputs; minotari selects inputs largest-first and offers no
-way to require the released ones, so a resend can spend different outputs and both
-can be mined, paying the payee twice. Until a resend that conflicts by construction
-exists, the wallet reports the after-the-fact signal instead:
+at least one of the same inputs; minotari selects inputs largest-first, so a plain
+resend can spend different outputs (for example a larger output received since) and
+both can be mined, paying the payee twice. A send with
+`MultiSendTransactionDetails.conflicts_with_transaction_id` set to the abandoned
+send's id conflicts by construction: it requires every released input that is still
+spendable, refuses when none is (each was spent elsewhere, so the original can no
+longer be mined, or another pending send holds it; the user should check the
+wallet's transactions first), and checks before signing that it shares an input with
+the original. Whichever of the two is mined first invalidates the other. Cake should
+pay again after an abandon **only** this way. The wallet also reports the
+after-the-fact signal, for sends paid again without it or in another app:
 `get_abandon_warnings(wallet_name)` reads the wallet's stored events and lists every
 abandoned send that was later mined (`MinedAfterAbandon`) or accepted by a node
 (`AcceptedAfterAbandon`), and the scan's `TransactionsReady` / `TransactionsUpdated`

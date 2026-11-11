@@ -22,7 +22,8 @@ The crate is split into two layers:
   `pub(crate)`, so nothing in it reaches the generated bridge. Dependencies
   (`Network`, secrets, computed values) flow in as **parameters** — never via
   globals. Current modules: `abandon` (pairing stored wallet events into
-  after-abandon warnings), `address` (address construction), `keys` (key-manager
+  after-abandon warnings, and the input checks behind a resend that conflicts with
+  an abandoned send), `address` (address construction), `keys` (key-manager
   derivation), `text` (cleaning node-supplied text), `validation` (send-input
   validation).
 
@@ -328,6 +329,13 @@ from `start_scan`, and why the send's outcome rides on its final event
   (`None` on every earlier stage); the event set, order and `details` texts are
   unchanged. Confirmation is reported by the scanner's `TransactionsUpdated`, not by
   the send stream.
+- **Resend after an abandon.** With `conflicts_with_transaction_id` set, the send
+  checks it before reserving anything (minotari's `abandoned_send_inputs`: an
+  abandoned send of this account), requires every released input that minotari's
+  input selector would see as spendable (`*_with_inputs`), and after the build
+  checks that the unsigned transaction spends at least one of the original's inputs,
+  releasing the reservation and refusing if not. The stream is unchanged; with the
+  field `None` the send calls exactly what it did before.
 
 ## Lint policy
 
