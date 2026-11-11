@@ -4,7 +4,7 @@ A [flutter_rust_bridge](https://github.com/fzyzcjy/flutter_rust_bridge) (FRB)
 binding that wraps the [Tari](https://www.tari.com/)
 [`minotari`](https://github.com/tari-project/minotari-cli) wallet for use from a
 Flutter app. The Rust crate
-(`rust_lib_flutter_rust_wallet`) compiles to native libraries; FRB generates the
+(`minotari_wallet_ffi`) compiles to native libraries; FRB generates the
 Dart glue. It is the wallet backend consumed by [Cake Wallet](https://cakewallet.com).
 
 The crate exposes a focused surface: database lifecycle, wallet

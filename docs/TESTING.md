@@ -1,6 +1,6 @@
 # Testing strategy
 
-This document describes how `rust_lib_flutter_rust_wallet` is tested, what is
+This document describes how `minotari_wallet_ffi` is tested, what is
 intentionally **not** tested yet, and which tests are **contract guards** that must
 not be flipped casually. It is the convention every later step extends.
 

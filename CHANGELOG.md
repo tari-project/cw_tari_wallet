@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `rust_lib_flutter_rust_wallet` are documented here.
+All notable changes to `minotari_wallet_ffi` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
@@ -33,6 +33,16 @@ Because the contract is **frozen**, the practical mapping is intentionally narro
 Every release must pass the full gate (`cargo build`, `cargo test`, `cargo fmt
 --check`, `cargo clippy`, `cargo deny check`, and `make gen` with a zero `.dart/**`
 diff) before the version is tagged.
+
+## [Unreleased]
+
+### Changed
+
+- The crate and its native library are renamed from `rust_lib_flutter_rust_wallet`
+  to `minotari_wallet_ffi` (`libminotari_wallet_ffi.so` / `.dylib`,
+  `minotari_wallet_ffi.dll`, `minotari_wallet_ffi.xcframework`), so the library
+  names the coin it serves. The Dart API is unchanged; only the library the
+  generated loader opens (`stem`) differs, so consumers update their packaging.
 
 ## [0.2.0] — not tagged yet (SPEC-12 tags `v0.2.0`)
 

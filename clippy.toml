@@ -1,4 +1,4 @@
-# Clippy configuration for rust_lib_flutter_rust_wallet.
+# Clippy configuration for minotari_wallet_ffi.
 #
 # No numeric thresholds are tuned yet; lint enforcement is flag-based
 # (`cargo clippy --all-targets --all-features -- -D warnings`) plus the

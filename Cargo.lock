@@ -2062,6 +2062,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "minotari_wallet_ffi"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "fern",
+ "file-rotate",
+ "flutter_rust_bridge",
+ "log",
+ "minotari-wallet-core",
+ "once_cell",
+ "r2d2",
+ "r2d2_sqlite",
+ "rand 0.10.1",
+ "tari_common",
+ "tari_common_types",
+ "tari_crypto",
+ "tari_hashing",
+ "tari_transaction_components",
+ "tari_utilities",
+ "tempfile",
+ "thiserror 2.0.17",
+ "threadpool",
+ "tokio",
+ "tokio-util",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "mio"
 version = "1.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2856,36 +2886,6 @@ dependencies = [
  "include_dir",
  "log",
  "rusqlite",
-]
-
-[[package]]
-name = "rust_lib_flutter_rust_wallet"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "chrono",
- "fern",
- "file-rotate",
- "flutter_rust_bridge",
- "log",
- "minotari-wallet-core",
- "once_cell",
- "r2d2",
- "r2d2_sqlite",
- "rand 0.10.1",
- "tari_common",
- "tari_common_types",
- "tari_crypto",
- "tari_hashing",
- "tari_transaction_components",
- "tari_utilities",
- "tempfile",
- "thiserror 2.0.17",
- "threadpool",
- "tokio",
- "tokio-util",
- "uuid",
- "zeroize",
 ]
 
 [[package]]
@@ -4180,11 +4180,11 @@ dependencies = [
  "chrono",
  "insta",
  "minotari-wallet-core",
+ "minotari_wallet_ffi",
  "primitive-types",
  "r2d2",
  "r2d2_sqlite",
  "rusqlite",
- "rust_lib_flutter_rust_wallet",
  "serde",
  "serde_json",
  "tari_common",

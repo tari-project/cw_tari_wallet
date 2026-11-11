@@ -1,4 +1,4 @@
-//! End-to-end verification harness for `rust_lib_flutter_rust_wallet`.
+//! End-to-end verification harness for `minotari_wallet_ffi`.
 //!
 //! This crate is a workspace member, so it is built/tested by this repo's CI and
 //! shares the library's exact dependency resolution — there is no separate,
