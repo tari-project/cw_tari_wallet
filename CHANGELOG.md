@@ -36,6 +36,55 @@ diff) before the version is tagged.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-11-11
+
+Additive only: existing Dart code builds and behaves as on 0.3.1.
+
+### Added (additive, SPEC-18)
+
+- `SendTransactionEvent.result` (`SendResultDto?`): the send's outcome on the
+  stream. FRB drops a streaming fn's return value, so Dart could not see it before.
+  It is set only on the final `Broadcasted` event, to exactly the value
+  `send_transaction` / `send_transaction_at_fee` resolve to: `transaction.id` (the
+  id `abandon_send` takes), `acceptedByNode`, `nodeReason` and `note`. Every other
+  event has `result == null`; the event set, order and `details` texts are
+  unchanged, and `TransactionStage` is untouched.
+- `get_abandon_warnings(walletName)` → `List<AbandonWarningDto>`: the wallet's sends
+  that were abandoned with `abandon_send` and then mined (`MinedAfterAbandon`) or
+  accepted by a node (`AcceptedAfterAbandon`) after all, one per send, ordered by
+  `eventId`. Read-only and offline (stored wallet events; no unlock needed). Errors:
+  `Database is not initialized`, `No accounts found for this wallet`,
+  `Database Error: …`.
+- `AbandonWarningDto { transactionId, kind, eventId }` and the plain enum
+  `AbandonWarningKind { acceptedAfterAbandon, minedAfterAbandon }`.
+- `TransactionsReadyDto.abandonedThenMinedIds` and
+  `TransactionsUpdatedDto.abandonedThenMinedIds` (`List<String>?`): the batch's
+  transaction ids that are abandoned sends mined after all, so a payment made again
+  may have paid twice. `null` when there are none or the lookup failed (logged; the
+  scan never fails for it). The scan's event set and order are unchanged and
+  `ScanEventDto` has no new variant.
+- `MultiSendTransactionDetails.conflictsWithTransactionId` (`String?`, last field):
+  pay again after `abandon_send` so the new send and the abandoned one can never both
+  be mined. Set it to the abandoned send's id; the send then spends every input the
+  abandon released that is still spendable (topped up as needed) and is checked before
+  signing to share at least one with the original. Works with `send_transaction` and
+  `send_transaction_at_fee`, normal sends and send-all; the stream (including
+  `result`) is unchanged. `null` sends exactly as before. New refusals, all before
+  anything is reserved except the last: `Wallet Error: The transaction to conflict
+  with is not an abandoned send of this wallet`, `Wallet Error: None of the abandoned
+  send's inputs can be spent; check the wallet's transactions before paying again`
+  and `Wallet Error: The resend does not conflict with the abandoned send` (its
+  reservation is released); a malformed id gives the existing `Wallet Error: Invalid
+  transaction id`. The `abandon_send` docs now say to pay again only this way.
+
+### Changed
+
+- Bumped `minotari-wallet-core` to minotari-cli `6743f50`. That includes
+  tari-project/minotari-cli#180, which lets a send require specific inputs and lists
+  an abandoned send's inputs, and #181, which fixes `get_output_by_id` and
+  `get_input_by_id` failing on stored timestamps. The `tari_*` crates stay at
+  `=6.3.0-pre.4`.
+
 ## [0.3.1] — 2026-11-11
 
 First published release of the v0.2 API. `v0.2.0` and `v0.3.0` were tagged but never

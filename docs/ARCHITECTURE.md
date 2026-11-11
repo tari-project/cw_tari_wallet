@@ -21,8 +21,11 @@ The crate is split into two layers:
   unit-testable in isolation. It carries no `#[frb]` annotations and is
   `pub(crate)`, so nothing in it reaches the generated bridge. Dependencies
   (`Network`, secrets, computed values) flow in as **parameters** — never via
-  globals. Current modules: `address` (address construction), `keys` (key-manager
-  derivation), `validation` (send-input validation).
+  globals. Current modules: `abandon` (pairing stored wallet events into
+  after-abandon warnings, and the input checks behind a resend that conflicts with
+  an abandoned send), `address` (address construction), `keys` (key-manager
+  derivation), `text` (cleaning node-supplied text), `validation` (send-input
+  validation).
 
 The wire contract — the `*Dto` types and their `From` impls — lives in `api`;
 `domain` only returns small internal value structs or a `WalletError`. This is the
@@ -293,7 +296,8 @@ Three functions stream progress to Dart over an FRB `StreamSink`:
 `send_transaction` (events: `SendTransactionEvent`), and `start_scan` and `rescan`
 (events: `ScanEventDto`). FRB discards the Rust return value of a streaming
 function, which is why the scan handle comes from `create_scan_handle` rather than
-from `start_scan`.
+from `start_scan`, and why the send's outcome rides on its final event
+(`SendTransactionEvent.result`).
 
 - **One scan implementation.** Both scan functions run `run_scan`; `rescan` rolls
   the wallet back once it owns the wallet's slot.
@@ -302,6 +306,13 @@ from `start_scan`.
   slow consumer grows memory). With `event_buffer` set it is bounded and the scanner
   waits for room instead; the forwarder keeps reading after a cancel so the scanner
   can always send its terminal event and finish.
+- **After-abandon hint (scan).** Before delivering a `TransactionsReady` or
+  `TransactionsUpdated`, the forwarder fills its `abandoned_then_mined_ids`: the
+  batch's outgoing, non-rejected transactions that `get_abandon_warnings` reports as
+  `MinedAfterAbandon` (a short read of the wallet's stored events; minotari commits a
+  batch before it sends that batch's events). A failed lookup logs and leaves `None`;
+  it never fails the scan or changes the event set or order. `ScanEventDto` gets no
+  new variant (a sealed class in Dart).
 - **Terminal events.** Every scan stream ends with exactly one of `Completed`,
   `Cancelled`, `Superseded`, `BudgetExhausted` or `Error`. The forwarder holds back
   minotari's terminal event and `run_scan` sends the one terminal event last
@@ -313,8 +324,18 @@ from `start_scan`.
     must finish (aborting it could lose funds).
 - **Send stages.** The send stream ends at `Broadcasted`: recorded and handed to the
   node, not confirmed. The send resolves to a `SendResultDto` (`accepted_by_node`
-  says whether the node took it; never resend after `Ok`). Confirmation is reported
-  by the scanner's `TransactionsUpdated`, not by the send stream.
+  says whether the node took it; never resend after `Ok`). Since FRB drops that
+  return value, the `Broadcasted` event carries the same value in its `result` field
+  (`None` on every earlier stage); the event set, order and `details` texts are
+  unchanged. Confirmation is reported by the scanner's `TransactionsUpdated`, not by
+  the send stream.
+- **Resend after an abandon.** With `conflicts_with_transaction_id` set, the send
+  checks it before reserving anything (minotari's `abandoned_send_inputs`: an
+  abandoned send of this account), requires every released input that minotari's
+  input selector would see as spendable (`*_with_inputs`), and after the build
+  checks that the unsigned transaction spends at least one of the original's inputs,
+  releasing the reservation and refusing if not. The stream is unchanged; with the
+  field `None` the send calls exactly what it did before.
 
 ## Lint policy
 

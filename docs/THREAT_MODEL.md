@@ -80,6 +80,35 @@ you trust. A send's `Broadcasted` stage only means the send was recorded and han
 to the node; confirmation comes from later scans (`TransactionsUpdated`), from the
 same trusted node.
 
+## Abandon and resend
+
+`abandon_send` gives up a stalled send and releases its inputs, but it cannot unsend
+it: a transaction kernel has no expiry, so any node or party holding the signed
+original can still get it mined for as long as all its inputs stay unspent. A
+payment made again after the abandon conflicts with the original only if it spends
+at least one of the same inputs; minotari selects inputs largest-first, so a plain
+resend can spend different outputs (for example a larger output received since) and
+both can be mined, paying the payee twice. A send with
+`MultiSendTransactionDetails.conflicts_with_transaction_id` set to the abandoned
+send's id conflicts by construction: it requires every released input that is still
+spendable, refuses when none is (each was spent elsewhere, so the original can no
+longer be mined, or another pending send holds it; the user should check the
+wallet's transactions first), and checks before signing that it shares an input with
+the original. Whichever of the two is mined first invalidates the other. Cake should
+pay again after an abandon **only** this way. The wallet also reports the
+after-the-fact signal, for sends paid again without it or in another app:
+`get_abandon_warnings(wallet_name)` reads the wallet's stored events and lists every
+abandoned send that was later mined (`MinedAfterAbandon`) or accepted by a node
+(`AcceptedAfterAbandon`), and the scan's `TransactionsReady` / `TransactionsUpdated`
+list a mined one in `abandoned_then_mined_ids` as it is found. Both are read-only
+and take no action. Cake should check them at startup and after each scan event, and
+warn the user that a send they abandoned was mined, so a payment made again since
+may have paid twice. Through this bridge, in one process, `AcceptedAfterAbandon` is
+practically unreachable (`abandon_send` stops the wallet's scan, and with it the
+rebroadcasting monitor, first); it can come from another process scanning the same
+database, and it has no scan event, so it is pull-only. Both signals come from the
+same base node the wallet trusts (see "Base-node trust").
+
 ## Accepted risks
 
 - **Force-lock window during a failed unlock.** While an `unlock_wallet` with a wrong

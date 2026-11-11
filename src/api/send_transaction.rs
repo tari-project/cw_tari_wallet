@@ -1,6 +1,6 @@
 use crate::api::config::{
-    DEFAULT_BASE_URL, DEFAULT_CONFIRMATION_WINDOW, MAX_FEE_PER_GRAM, SECONDS_TO_LOCK_UTXO,
-    SEND_FEE_PER_GRAM,
+    ABANDON_EVENTS_PAGE_SIZE, DEFAULT_BASE_URL, DEFAULT_CONFIRMATION_WINDOW, MAX_FEE_PER_GRAM,
+    SECONDS_TO_LOCK_UTXO, SEND_FEE_PER_GRAM,
 };
 use crate::api::db::{
     blocking, get_db_connection, get_db_pool, is_unlocked, release_expired_reservations,
@@ -10,6 +10,7 @@ use crate::api::error::WalletError;
 use crate::api::network::{apply_network, parse_network, TariNetwork};
 use crate::api::scanner::{begin_maintenance, stop_wallet_scans};
 use crate::api::transactions::DisplayedTransactionDto;
+use crate::domain::abandon;
 use crate::domain::text::strip_format_chars;
 use crate::domain::validation::{
     validate_fee_per_gram, validate_recipient, validate_recipient_count,
@@ -17,9 +18,15 @@ use crate::domain::validation::{
 use crate::frb_generated::StreamSink;
 use anyhow::Result;
 use flutter_rust_bridge::frb;
-use minotari_wallet::db::{expire_and_unlock_pending_transaction, WalletDbError};
+use minotari_wallet::db::{
+    expire_and_unlock_pending_transaction, fetch_unspent_outputs, get_events_by_account_id,
+    get_latest_scanned_tip_block_by_account, get_output_by_id, WalletDbError,
+};
 use minotari_wallet::get_accounts;
-use minotari_wallet::transactions::abandon::AbandonSendError;
+use minotari_wallet::models::WalletEventType;
+use minotari_wallet::transactions::abandon::{
+    abandoned_send_inputs, AbandonSendError, AbandonedSendInputsError,
+};
 use minotari_wallet::transactions::manager::{FinalizedSend, TransactionSender};
 use minotari_wallet::transactions::one_sided_transaction::Recipient;
 use tari_common::configuration::Network;
@@ -58,6 +65,23 @@ pub struct SendRecipient {
 /// (`None` → 3). With `send_all` set, `recipients` must hold exactly one entry and it
 /// receives every spendable output less the fee; quote that first with
 /// [`estimate_send_all_fee`](crate::api::fee::estimate_send_all_fee).
+///
+/// `conflicts_with_transaction_id` is for paying again after [`abandon_send`]: set it
+/// to the abandoned send's id (the `transaction_id` given to `abandon_send`), and pay
+/// the payee again **only** this way. The send then spends every input the abandoned
+/// send released that is still spendable (topped up from other outputs as needed), so
+/// it and the original can never both be mined: whichever is mined first invalidates
+/// the other, and the scan reports the loser as rejected. It is refused, before any
+/// UTXO is reserved, with `Wallet Error: Invalid transaction id` (not a number),
+/// `Wallet Error: The transaction to conflict with is not an abandoned send of this
+/// wallet` (unknown, another wallet's, not abandoned, or abandoned and since mined) or
+/// `Wallet Error: None of the abandoned send's inputs can be spent; check the wallet's
+/// transactions before paying again` (each was spent elsewhere, so the original can no
+/// longer be mined, or is held by another pending send), or `Wallet Error: …` with
+/// minotari's reason if the abandoned send's stored transaction cannot be read; and,
+/// as a final check before signing, with `Wallet Error: The resend does not conflict
+/// with the abandoned send` (its reservation is released). `None` sends exactly as
+/// before.
 #[frb]
 pub struct MultiSendTransactionDetails {
     pub network: Option<TariNetwork>,
@@ -66,6 +90,7 @@ pub struct MultiSendTransactionDetails {
     pub recipients: Vec<SendRecipient>,
     pub send_all: bool,
     pub confirmation_window: Option<u64>,
+    pub conflicts_with_transaction_id: Option<String>,
 }
 
 /// Validated, typed inputs for building a transaction.
@@ -73,6 +98,38 @@ struct ValidatedInputs {
     network: Network,
     recipients: Vec<Recipient>,
     confirmations: u64,
+    /// The abandoned send the new one must conflict with, if any.
+    conflicts_with: Option<TxId>,
+}
+
+/// The Dart-visible reason a resend is refused because its
+/// `conflicts_with_transaction_id` is not an abandoned send of the wallet.
+const NOT_AN_ABANDONED_SEND: &str =
+    "The transaction to conflict with is not an abandoned send of this wallet";
+
+/// The Dart-visible reason a resend is refused because none of the abandoned send's
+/// inputs can be spent now.
+const NO_SPENDABLE_RELEASED_INPUT: &str =
+    "None of the abandoned send's inputs can be spent; check the wallet's transactions before paying again";
+
+/// The Dart-visible reason a resend is refused because the built transaction shares
+/// no input with the abandoned send.
+const RESEND_DOES_NOT_CONFLICT: &str = "The resend does not conflict with the abandoned send";
+
+/// What a resend needs to conflict with an abandoned send.
+struct Conflict {
+    /// The `outputs` row ids it must spend: the released inputs still spendable.
+    required_inputs: Vec<i64>,
+    /// The output hashes of every input of the abandoned send this wallet knows.
+    original_inputs: Vec<Vec<u8>>,
+}
+
+/// Parse a `DisplayedTransactionDto.id`.
+fn parse_transaction_id(transaction_id: &str) -> Result<TxId, WalletError> {
+    transaction_id
+        .parse::<u64>()
+        .map(TxId::from)
+        .map_err(|_| WalletError::wallet("Invalid transaction id"))
 }
 
 /// The lifecycle stage of an in-flight send, carried on each
@@ -96,14 +153,25 @@ pub enum TransactionStage {
 
 /// A progress event streamed during [`send_transaction`]: the current
 /// [`TransactionStage`] plus a human-readable `details` message.
+///
+/// `result` is the send's outcome, the same [`SendResultDto`] the call resolves to
+/// (FRB does not deliver a streaming fn's return value to Dart, so this is how Dart
+/// learns it). It is set only on the final `Broadcasted` event and `None` on every
+/// other stage. Read `result.transaction.id` (the id [`abandon_send`] takes),
+/// `result.accepted_by_node`, `result.node_reason` and `result.note` from it; when
+/// `accepted_by_node` is `false` the send is recorded and rebroadcast, so **do not
+/// send it again**. A send that fails before `Broadcasted` emits no `result` and
+/// resolves to the error instead.
 #[frb]
 #[derive(Clone)]
 pub struct SendTransactionEvent {
     pub stage: TransactionStage,
     pub details: String,
+    pub result: Option<SendResultDto>,
 }
 
-/// The outcome of a [`send_transaction`].
+/// The outcome of a [`send_transaction`], delivered to Dart as the `result` of the
+/// final `Broadcasted` [`SendTransactionEvent`].
 ///
 /// `transaction` is the recorded send, pending until the scan sees it mined.
 /// `accepted_by_node` is whether the node took the first broadcast (or already had
@@ -140,7 +208,8 @@ const NOT_STALLED: &str =
 
 /// Give up a stalled send and release its inputs.
 ///
-/// `transaction_id` is the send's `DisplayedTransactionDto.id`; `passphrase`
+/// `transaction_id` is the send's `DisplayedTransactionDto.id` (for a send made with
+/// [`send_transaction`]: `result.transaction.id` of its `Broadcasted` event); `passphrase`
 /// (**secret**) must open wallet `wallet_name`. Delegates to minotari, which only
 /// abandons a send that is not mined and has stalled: the node refused its last
 /// rebroadcasts in a row (rebroadcasts happen while a scan runs, so keep scanning
@@ -153,10 +222,16 @@ const NOT_STALLED: &str =
 ///
 /// The original can still be mined if a node holds it. Right after an abandon,
 /// `Rejected` means "not known to be mined", not "will not be mined": do not treat it
-/// as proof until later scans from a trusted node still show it rejected. If you pay
-/// the payee again, prefer a send that spends the same inputs, so it conflicts with
-/// the original instead of paying twice. minotari selects the largest outputs first,
-/// so a same-amount resend usually picks the released inputs again.
+/// as proof until later scans from a trusted node still show it rejected. Pay the
+/// payee again **only** with a send whose
+/// [`MultiSendTransactionDetails::conflicts_with_transaction_id`] is this
+/// `transaction_id`: that send spends the released inputs, so it and the original can
+/// never both be mined. Whichever is mined first invalidates the other, and the scan
+/// reports the loser as rejected. A send without it selects inputs on its own and can
+/// pay twice. If the original is accepted or mined after all,
+/// [`get_abandon_warnings`] reports it (and the scan event that carries it lists it in
+/// `abandoned_then_mined_ids`): check it after each scan event and at startup, and
+/// warn the user that a payment made again may have paid twice.
 ///
 /// Errors: `Invalid Passphrase`, `No accounts found for this wallet`,
 /// `Wallet Error: Invalid transaction id`, `Wallet Error: The send has not stalled
@@ -172,9 +247,7 @@ pub async fn abandon_send(
     transaction_id: String,
 ) -> Result<String> {
     let passphrase = Zeroizing::new(passphrase);
-    let tx_id: u64 = transaction_id
-        .parse()
-        .map_err(|_| WalletError::wallet("Invalid transaction id"))?;
+    let tx_id = parse_transaction_id(&transaction_id)?;
 
     // Check the passphrase (Argon2, off the runtime) before touching a running scan.
     let conn = get_db_connection()?;
@@ -204,12 +277,7 @@ pub async fn abandon_send(
     // accept a send without a change output. A write transaction: off the runtime.
     let abandoned = blocking(move || {
         minotari_wallet::transactions::abandon::abandon_send(
-            &mut conn,
-            account_id,
-            TxId::from(tx_id),
-            false,
-            false,
-            None,
+            &mut conn, account_id, tx_id, false, false, None,
         )
         .map_err(|e| match e {
             // Upstream's text suggests a `force` flag this API does not offer.
@@ -219,6 +287,109 @@ pub async fn abandon_send(
     })
     .await?;
     Ok(abandoned.note().to_string())
+}
+
+/// What happened to a send after the user abandoned it, in an [`AbandonWarningDto`].
+///
+/// `MinedAfterAbandon`: the send was mined after all, so a payment made again after
+/// the abandon may have paid the payee twice. `AcceptedAfterAbandon`: a node accepted
+/// a rebroadcast of it after the abandon (it may still be mined).
+#[frb]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbandonWarningKind {
+    AcceptedAfterAbandon,
+    MinedAfterAbandon,
+}
+
+impl From<abandon::WarningKind> for AbandonWarningKind {
+    fn from(kind: abandon::WarningKind) -> Self {
+        match kind {
+            abandon::WarningKind::AcceptedAfterAbandon => Self::AcceptedAfterAbandon,
+            abandon::WarningKind::MinedAfterAbandon => Self::MinedAfterAbandon,
+        }
+    }
+}
+
+/// A send the user abandoned ([`abandon_send`]) that a node accepted or that was
+/// mined after all, from [`get_abandon_warnings`].
+///
+/// `transaction_id` is the send's `DisplayedTransactionDto.id`; `event_id` is the id
+/// of the wallet event that raised the warning (increasing over time, so an app can
+/// remember the highest one it has shown).
+#[frb]
+#[derive(Debug, Clone)]
+pub struct AbandonWarningDto {
+    pub transaction_id: String,
+    pub kind: AbandonWarningKind,
+    pub event_id: i64,
+}
+
+impl From<abandon::AbandonWarning> for AbandonWarningDto {
+    fn from(w: abandon::AbandonWarning) -> Self {
+        Self {
+            transaction_id: w.tx_id.to_string(),
+            kind: w.kind.into(),
+            event_id: w.event_id,
+        }
+    }
+}
+
+/// The sends of `wallet_name` that were accepted by a node or mined after the user
+/// abandoned them, one entry per send, ordered by `event_id`.
+///
+/// Read-only and offline: reads the wallet's stored events, so it needs a database
+/// path (`set_database_path` or `unlock_wallet`) but not an unlocked wallet, and it
+/// also sees what another process scanning the same database recorded. Call it at
+/// startup and after each `TransactionsReady` / `TransactionsUpdated` (whose
+/// `abandoned_then_mined_ids` flags the mined case as it is found). For a
+/// `MinedAfterAbandon` entry, warn the user that a send they abandoned was mined, so a
+/// payment made again since may have paid twice; nothing is done automatically. An
+/// entry is never withdrawn. Synchronous.
+///
+/// Errors: `Database is not initialized`, `No accounts found for this wallet`,
+/// `Database Error: …`.
+#[frb]
+pub fn get_abandon_warnings(wallet_name: String) -> Result<Vec<AbandonWarningDto>> {
+    let conn = get_db_connection()?;
+    let accounts = get_accounts(&conn, Some(&wallet_name))
+        .map_err(|e| WalletError::database(e.to_string()))?;
+    let account = accounts.first().ok_or(WalletError::NoAccounts)?;
+    Ok(abandon_warnings(&conn, account.id)?
+        .into_iter()
+        .map(Into::into)
+        .collect())
+}
+
+/// The after-abandon warnings of account `account_id`, from all its stored events.
+pub(crate) fn abandon_warnings(
+    conn: &r2d2_sqlite::rusqlite::Connection,
+    account_id: i64,
+) -> Result<Vec<abandon::AbandonWarning>> {
+    let mut events = Vec::new();
+    let mut offset = 0;
+    loop {
+        let page = get_events_by_account_id(conn, account_id, ABANDON_EVENTS_PAGE_SIZE, offset)
+            .map_err(|e| WalletError::database(e.to_string()))?;
+        let read = page.len();
+        for row in page {
+            // A row this build cannot read (e.g. a newer minotari's event) is no
+            // warning it knows of.
+            match row
+                .data_json
+                .as_deref()
+                .map(serde_json::from_str::<WalletEventType>)
+            {
+                Some(Ok(event)) => events.push((row.id, event)),
+                Some(Err(e)) => log::debug!("Skipping unreadable wallet event {}: {e}", row.id),
+                None => {}
+            }
+        }
+        if read < ABANDON_EVENTS_PAGE_SIZE as usize {
+            break;
+        }
+        offset += ABANDON_EVENTS_PAGE_SIZE;
+    }
+    Ok(abandon::pair_abandon_warnings(events))
 }
 
 /// Resolves `Ok` even when the node has not accepted the send yet: it is recorded and
@@ -248,6 +419,7 @@ where
         status_callback(SendTransactionEvent {
             stage,
             details: msg.to_string(),
+            result: None,
         });
     };
 
@@ -281,6 +453,21 @@ where
         Err(e) => log::warn!("Could not check for expired UTXO reservations: {e}"),
     }
 
+    // A resend after an abandon: find the released inputs it must spend, before any
+    // UTXO is reserved.
+    let conflict = match validated.conflicts_with {
+        Some(tx_id) => Some(resolve_conflict(
+            &*sender
+                .db_pool
+                .get()
+                .map_err(|e| WalletError::database(e.to_string()))?,
+            sender.account.id,
+            tx_id,
+            validated.confirmations,
+        )?),
+        None => None,
+    };
+
     report(
         TransactionStage::ConstructingTransaction,
         "Building transaction UTXOs...",
@@ -293,7 +480,11 @@ where
         &details.wallet_name,
         validated.recipients,
         details.send_all,
+        conflict.as_ref().map(|c| c.required_inputs.as_slice()),
     )?;
+    if let Some(conflict) = &conflict {
+        ensure_conflicts(&unsigned_tx, conflict, &pending_transaction_id)?;
+    }
 
     report(
         TransactionStage::SigningKeyGeneration,
@@ -362,9 +553,15 @@ where
         );
     }
 
-    report(TransactionStage::Broadcasted, "Transaction broadcast");
+    // The final event carries exactly what the call resolves to.
+    let result = SendResultDto::from(sent);
+    status_callback(SendTransactionEvent {
+        stage: TransactionStage::Broadcasted,
+        details: "Transaction broadcast".to_string(),
+        result: Some(result.clone()),
+    });
 
-    Ok(sent.into())
+    Ok(result)
 }
 
 /// Approve this process's own payload for signing, without a prompt.
@@ -446,7 +643,9 @@ fn map_signing_error(e: TransactionBuilderError) -> WalletError {
 ///
 /// Streams a [`SendTransactionEvent`] for each [`TransactionStage`] over `sink` and
 /// resolves to a [`SendResultDto`]: the recorded, `Pending` transaction plus whether
-/// the node accepted it. The wallet must be unlocked; no seed words or passphrase are
+/// the node accepted it. FRB does not hand that return value to Dart, so the final
+/// `Broadcasted` event carries the same value in its `result` field; read the
+/// outcome there. The wallet must be unlocked; no seed words or passphrase are
 /// needed. Each recipient gets its own output carrying its own `payment_id`.
 ///
 /// `Ok` means the send is recorded, not necessarily accepted by the node; the scan's
@@ -512,13 +711,108 @@ fn validate_inputs(details: &MultiSendTransactionDetails) -> Result<ValidatedInp
         });
     }
 
+    let conflicts_with = details
+        .conflicts_with_transaction_id
+        .as_deref()
+        .map(parse_transaction_id)
+        .transpose()?;
+
     Ok(ValidatedInputs {
         network,
         recipients,
         confirmations: details
             .confirmation_window
             .unwrap_or(DEFAULT_CONFIRMATION_WINDOW),
+        conflicts_with,
     })
+}
+
+/// What a resend of account `account_id` needs to conflict with its abandoned send
+/// `tx_id`: the send's released inputs that are spendable now (as the input selector
+/// sees them under `confirmation_window`), and the output hashes of all its inputs.
+///
+/// Refuses with [`NOT_AN_ABANDONED_SEND`] when the account has no send `tx_id` or it is
+/// not `Rejected` as abandoned, and with [`NO_SPENDABLE_RELEASED_INPUT`] when none of
+/// its inputs is spendable.
+fn resolve_conflict(
+    conn: &r2d2_sqlite::rusqlite::Connection,
+    account_id: i64,
+    tx_id: TxId,
+    confirmation_window: u64,
+) -> Result<Conflict, WalletError> {
+    let released = abandoned_send_inputs(conn, account_id, tx_id).map_err(|e| match e {
+        AbandonedSendInputsError::NotFound(_) | AbandonedSendInputsError::NotAbandoned { .. } => {
+            WalletError::wallet(NOT_AN_ABANDONED_SEND)
+        }
+        AbandonedSendInputsError::Db(e) => WalletError::database(e.to_string()),
+        other => WalletError::wallet(other.to_string()),
+    })?;
+
+    // The input selector's own view of what is spendable.
+    let tip_height = get_latest_scanned_tip_block_by_account(conn, account_id)
+        .map_err(|e| WalletError::database(e.to_string()))?
+        .map(|b| b.height)
+        .unwrap_or(0);
+    let spendable: Vec<i64> = fetch_unspent_outputs(
+        conn,
+        account_id,
+        tip_height.saturating_sub(confirmation_window),
+        tip_height,
+    )
+    .map_err(|e| WalletError::database(e.to_string()))?
+    .iter()
+    .map(|output| output.id)
+    .collect();
+    let required_inputs = abandon::spendable_released_inputs(&released, &spendable);
+    if required_inputs.is_empty() {
+        return Err(WalletError::wallet(NO_SPENDABLE_RELEASED_INPUT));
+    }
+
+    let mut original_inputs = Vec::with_capacity(released.len());
+    for output_id in &released {
+        original_inputs.push(output_hash(conn, account_id, *output_id)?);
+    }
+    Ok(Conflict {
+        required_inputs,
+        original_inputs,
+    })
+}
+
+/// The output hash of account `account_id`'s output `output_id`.
+fn output_hash(
+    conn: &r2d2_sqlite::rusqlite::Connection,
+    account_id: i64,
+    output_id: i64,
+) -> Result<Vec<u8>, WalletError> {
+    match get_output_by_id(conn, output_id) {
+        Ok(Some(output)) if output.account_id == account_id => Ok(output.output_hash),
+        Ok(_) => Err(WalletError::database(format!(
+            "output {output_id} not found"
+        ))),
+        Err(e) => Err(WalletError::database(e.to_string())),
+    }
+}
+
+/// Defence in depth before signing: the built transaction must spend at least one
+/// input of the abandoned send. Otherwise its reservation is released and the send
+/// refused with [`RESEND_DOES_NOT_CONFLICT`].
+fn ensure_conflicts(
+    unsigned_tx: &PrepareOneSidedTransactionForSigningResult,
+    conflict: &Conflict,
+    pending_transaction_id: &str,
+) -> Result<(), WalletError> {
+    let inputs: Vec<Vec<u8>> = unsigned_tx
+        .info
+        .inputs
+        .iter()
+        .map(|input| input.output_hash().to_vec())
+        .collect();
+    if abandon::shares_an_input(&inputs, &conflict.original_inputs) {
+        return Ok(());
+    }
+    log::warn!("A resend shares no input with the abandoned send; refusing it");
+    release_send_reservation(pending_transaction_id);
+    Err(WalletError::wallet(RESEND_DOES_NOT_CONFLICT))
 }
 
 /// Build the [`TransactionSender`] for `wallet_name`, which uses its key session.
@@ -557,9 +851,10 @@ fn build_while_unlocked(
     wallet_name: &str,
     recipients: Vec<Recipient>,
     send_all: bool,
+    required_inputs: Option<&[i64]>,
 ) -> Result<(String, PrepareOneSidedTransactionForSigningResult)> {
     let (pending_transaction_id, unsigned_tx) =
-        build_unsigned_transaction(sender, recipients, send_all).map_err(|e| {
+        build_unsigned_transaction(sender, recipients, send_all, required_inputs).map_err(|e| {
             if session_gone(wallet_name) {
                 WalletError::Locked.into()
             } else {
@@ -601,10 +896,13 @@ fn same_account(
 /// The Dart-visible reason an abandon is refused because its wallet changed meanwhile.
 const WALLET_REPLACED: &str = "The wallet was renamed or replaced; try again";
 
+/// Reserve inputs and build the unsigned transaction; with `required_inputs`
+/// (`outputs` row ids) those are always spent, otherwise minotari selects every input.
 fn build_unsigned_transaction(
     sender: &mut TransactionSender,
     mut recipients: Vec<Recipient>,
     send_all: bool,
+    required_inputs: Option<&[i64]>,
 ) -> Result<(String, PrepareOneSidedTransactionForSigningResult)> {
     let idempotency_key = uuid::Uuid::new_v4().to_string();
 
@@ -613,14 +911,35 @@ fn build_unsigned_transaction(
         let recipient = recipients
             .pop()
             .ok_or_else(|| WalletError::wallet("A send-all pays exactly one recipient"))?;
-        sender.start_new_send_all_transaction(
-            idempotency_key,
-            recipient.address,
-            recipient.payment_id,
-            SECONDS_TO_LOCK_UTXO,
-        )
+        match required_inputs {
+            None => sender.start_new_send_all_transaction(
+                idempotency_key,
+                recipient.address,
+                recipient.payment_id,
+                SECONDS_TO_LOCK_UTXO,
+            ),
+            Some(required) => sender.start_new_send_all_transaction_with_inputs(
+                idempotency_key,
+                recipient.address,
+                recipient.payment_id,
+                SECONDS_TO_LOCK_UTXO,
+                required,
+            ),
+        }
     } else {
-        sender.start_new_transaction_multi(idempotency_key, recipients, SECONDS_TO_LOCK_UTXO)
+        match required_inputs {
+            None => sender.start_new_transaction_multi(
+                idempotency_key,
+                recipients,
+                SECONDS_TO_LOCK_UTXO,
+            ),
+            Some(required) => sender.start_new_transaction_multi_with_inputs(
+                idempotency_key,
+                recipients,
+                SECONDS_TO_LOCK_UTXO,
+                required,
+            ),
+        }
     }
     .map_err(|e| WalletError::wallet(format!("Failed to build transaction: {}", e)))?;
 
@@ -684,6 +1003,7 @@ mod tests {
             }],
             send_all: false,
             confirmation_window,
+            conflicts_with_transaction_id: None,
         }
     }
 
@@ -783,6 +1103,7 @@ mod tests {
             status_callback(SendTransactionEvent {
                 stage,
                 details: String::new(),
+                result: None,
             });
         }
 
@@ -835,7 +1156,7 @@ mod tests {
             amount: MicroMinotari(1_000),
             payment_id: None,
         };
-        build_unsigned_transaction(&mut sender, vec![recipient], false)
+        build_unsigned_transaction(&mut sender, vec![recipient], false, None)
             .expect("the session builds the transaction");
         drop(conn);
         lock_wallet("test".into()).await.unwrap();
@@ -870,7 +1191,7 @@ mod tests {
             payment_id: None,
         };
         let (pending_id, _) =
-            build_unsigned_transaction(&mut sender, vec![recipient], false).unwrap();
+            build_unsigned_transaction(&mut sender, vec![recipient], false, None).unwrap();
 
         drop(conn);
         (dir, pool, output_id, pending_id)
@@ -1030,7 +1351,8 @@ mod tests {
                 amount: MicroMinotari(1_000),
                 payment_id: None,
             };
-            let Err(err) = build_while_unlocked(&mut sender, "test", vec![recipient], false) else {
+            let Err(err) = build_while_unlocked(&mut sender, "test", vec![recipient], false, None)
+            else {
                 panic!("a send after a lock must not build (passphrase {passphrase:?})");
             };
             assert_eq!(
@@ -1124,6 +1446,133 @@ mod tests {
         // Proves the adapter resolved `Some(MainNet)` via `parse_network`.
         assert_eq!(validated.network, Network::MainNet);
         assert_eq!(validated.confirmations, DEFAULT_CONFIRMATION_WINDOW);
+    }
+
+    /// `conflicts_with_transaction_id`: `None` asks for no conflict; a number is the
+    /// abandoned send's id; anything else is refused before any UTXO is reserved, with
+    /// the same string as `abandon_send`.
+    #[test]
+    fn conflicts_with_transaction_id_is_parsed_as_a_transaction_id() {
+        let good = deterministic_recipient_base58(Network::MainNet);
+        let mut details = details_with(good, 1_000, None);
+        let validated = validate_inputs(&details).expect("no conflict asked for");
+        assert_eq!(validated.conflicts_with, None);
+
+        details.conflicts_with_transaction_id = Some("42".to_string());
+        let validated = validate_inputs(&details).expect("a numeric id");
+        assert_eq!(validated.conflicts_with, Some(TxId::from(42u64)));
+
+        for bad in ["", "abc", "-1", "4 2", "18446744073709551616"] {
+            details.conflicts_with_transaction_id = Some(bad.to_string());
+            let Err(err) = validate_inputs(&details) else {
+                panic!("{bad:?} is no transaction id");
+            };
+            assert_eq!(
+                err.to_string(),
+                "Wallet Error: Invalid transaction id",
+                "{bad:?}"
+            );
+        }
+
+        // A bad recipient is reported first, as before the field existed.
+        details.recipients[0].address = "not-a-valid-base58-address".to_string();
+        let Err(err) = validate_inputs(&details) else {
+            panic!("a bad recipient must be rejected");
+        };
+        assert!(err.to_string().starts_with("Invalid Recipient Address: "));
+    }
+
+    /// CONTRACT: the three Dart-visible refusals of a conflicting resend.
+    #[test]
+    fn resend_refusal_strings_are_frozen() {
+        assert_eq!(
+            WalletError::wallet(NOT_AN_ABANDONED_SEND).to_string(),
+            "Wallet Error: The transaction to conflict with is not an abandoned send of this wallet"
+        );
+        assert_eq!(
+            WalletError::wallet(NO_SPENDABLE_RELEASED_INPUT).to_string(),
+            "Wallet Error: None of the abandoned send's inputs can be spent; check the wallet's transactions before paying again"
+        );
+        assert_eq!(
+            WalletError::wallet(RESEND_DOES_NOT_CONFLICT).to_string(),
+            "Wallet Error: The resend does not conflict with the abandoned send"
+        );
+    }
+
+    /// A send id the account does not have is no abandoned send of it.
+    #[test]
+    fn resolve_conflict_refuses_an_unknown_send() {
+        let (_dir, pool, _) = funded_account("pass");
+        let conn = pool.get().unwrap();
+        let account_id = minotari_wallet::db::get_account_by_name(&conn, "test")
+            .unwrap()
+            .unwrap()
+            .id;
+        let Err(err) = resolve_conflict(&conn, account_id, TxId::from(999u64), 3) else {
+            panic!("an unknown send must be refused");
+        };
+        assert_eq!(
+            err.to_string(),
+            "Wallet Error: The transaction to conflict with is not an abandoned send of this wallet"
+        );
+    }
+
+    /// The defence-in-depth check before signing: a built send that shares no input
+    /// with the abandoned one is refused and its reservation released; one that shares
+    /// an input passes and keeps it.
+    #[tokio::test]
+    async fn a_resend_sharing_no_input_is_refused_and_released() {
+        use crate::api::db::{set_database_path, GLOBAL_STATE_TEST_LOCK};
+
+        let _guard = GLOBAL_STATE_TEST_LOCK.lock().await;
+        let (dir, pool, output_id) = funded_account("pass");
+        let path = dir.path().join("wallet.db").to_string_lossy().into_owned();
+        set_database_path(path).unwrap();
+        let conn = pool.get().unwrap();
+        let account = minotari_wallet::db::get_account_by_name(&conn, "test")
+            .unwrap()
+            .unwrap();
+        let mut sender = TransactionSender::new(
+            pool.clone(),
+            "test".to_string(),
+            Zeroizing::new("pass".to_string()),
+            Network::LocalNet,
+            3,
+        )
+        .unwrap();
+        let recipient = Recipient {
+            address: account.get_address(Network::LocalNet, "pass").unwrap(),
+            amount: MicroMinotari(1_000),
+            payment_id: None,
+        };
+        let (pending_id, unsigned_tx) =
+            build_unsigned_transaction(&mut sender, vec![recipient], false, Some(&[output_id]))
+                .unwrap();
+        assert_eq!(output_status(&conn, output_id), "LOCKED");
+        let spent = output_hash(&conn, account.id, output_id).unwrap();
+
+        let shares = Conflict {
+            required_inputs: vec![output_id],
+            original_inputs: vec![vec![9u8; 32], spent],
+        };
+        ensure_conflicts(&unsigned_tx, &shares, &pending_id).expect("shares an input");
+        assert_eq!(output_status(&conn, output_id), "LOCKED");
+
+        let disjoint = Conflict {
+            required_inputs: vec![output_id],
+            original_inputs: vec![vec![9u8; 32]],
+        };
+        let err =
+            ensure_conflicts(&unsigned_tx, &disjoint, &pending_id).expect_err("shares no input");
+        assert_eq!(
+            err.to_string(),
+            "Wallet Error: The resend does not conflict with the abandoned send"
+        );
+        assert_eq!(
+            output_status(&conn, output_id),
+            "UNSPENT",
+            "the reservation is released"
+        );
     }
 
     #[test]

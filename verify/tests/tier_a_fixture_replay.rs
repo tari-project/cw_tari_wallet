@@ -34,8 +34,9 @@ use minotari_wallet_ffi::api::scanner::{
     ScanEventDto, ScanPriority,
 };
 use minotari_wallet_ffi::api::send_transaction::{
-    abandon_send, send_transaction_at_fee_with_handler, send_transaction_with_handler,
-    MultiSendTransactionDetails, SendRecipient, TransactionStage,
+    abandon_send, get_abandon_warnings, send_transaction_at_fee_with_handler,
+    send_transaction_with_handler, AbandonWarningKind, MultiSendTransactionDetails, SendRecipient,
+    SendResultDto, SendTransactionEvent, TransactionStage,
 };
 use minotari_wallet_ffi::api::signing::{sign_message, verify_message};
 use minotari_wallet_ffi::api::transactions::get_transactions;
@@ -528,7 +529,7 @@ fn rescan_of_a_locked_wallet_changes_nothing() {
 async fn mock_chain_node() -> wiremock::MockServer {
     let server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::any())
-        .respond_with(MockChain)
+        .respond_with(MockChain::default())
         .mount(&server)
         .await;
     server
@@ -616,6 +617,11 @@ struct FundedWallet {
 /// The fixture DB plus a restored seed-words wallet holding [`FUNDED_VALUES`], both
 /// unlocked. The recipient is the fixture's own (view-only) wallet.
 fn with_funded_wallet() -> FundedWallet {
+    with_funded_wallet_holding(&FUNDED_VALUES)
+}
+
+/// [`with_funded_wallet`] holding outputs of `values` instead.
+fn with_funded_wallet_holding(values: &[u64]) -> FundedWallet {
     let db = with_fixture_db();
     let db_path = db.db_path.clone();
 
@@ -626,7 +632,7 @@ fn with_funded_wallet() -> FundedWallet {
         Some(TariNetwork::Esmeralda),
     )
     .expect("restore_wallet");
-    fixture::add_spendable_outputs(&db_path, FUNDED, FUNDED_PASSPHRASE, &FUNDED_VALUES)
+    fixture::add_spendable_outputs(&db_path, FUNDED, FUNDED_PASSPHRASE, values)
         .expect("add outputs");
     db.unlock(FUNDED, FUNDED_PASSPHRASE)
         .expect("unlock the funded wallet");
@@ -648,6 +654,7 @@ fn funded_send(
         recipients,
         send_all,
         confirmation_window: None,
+        conflicts_with_transaction_id: None,
     }
 }
 
@@ -1140,6 +1147,7 @@ fn key_imported_wallet_sends_with_its_stored_keys() {
         }],
         send_all: false,
         confirmation_window: None,
+        conflicts_with_transaction_id: None,
     };
 
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -1169,11 +1177,23 @@ fn send_via_mock_node(
     funded: &FundedWallet,
     runtime: &tokio::runtime::Runtime,
     accepted: Option<bool>,
-) -> minotari_wallet_ffi::api::send_transaction::SendResultDto {
-    runtime
+) -> SendResultDto {
+    let submit = accepted.map(|accepted| (accepted, "None"));
+    send_via_mock_node_with_events(funded, runtime, submit).1
+}
+
+/// [`send_via_mock_node`] answering `submit` with `(accepted, rejection_reason)`,
+/// returning every streamed event as well as the resolved result.
+fn send_via_mock_node_with_events(
+    funded: &FundedWallet,
+    runtime: &tokio::runtime::Runtime,
+    submit: Option<(bool, &str)>,
+) -> (Vec<SendTransactionEvent>, SendResultDto) {
+    let events = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let sent = runtime
         .block_on(async {
             let server = wiremock::MockServer::start().await;
-            if let Some(accepted) = accepted {
+            if let Some((accepted, rejection_reason)) = submit {
                 wiremock::Mock::given(wiremock::matchers::method("POST"))
                     .and(wiremock::matchers::path("/json_rpc"))
                     .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
@@ -1182,7 +1202,7 @@ fn send_via_mock_node(
                             "id": "1",
                             "result": {
                                 "accepted": accepted,
-                                "rejection_reason": "None",
+                                "rejection_reason": rejection_reason,
                                 "is_synced": true
                             }
                         }),
@@ -1200,9 +1220,77 @@ fn send_via_mock_node(
                 false,
                 server.uri(),
             );
-            send_transaction_with_handler(details, |_| {}).await
+            let sink = events.clone();
+            send_transaction_with_handler(details, move |event| sink.lock().unwrap().push(event))
+                .await
         })
-        .expect("send")
+        .expect("send");
+    let events = std::mem::take(&mut *events.lock().unwrap());
+    (events, sent)
+}
+
+/// The send stream's stage order is unchanged and only its last event, `Broadcasted`,
+/// carries `result`: exactly the value the send resolves to. Covers a node that
+/// accepts, one that refuses (`DoubleSpend`) and one that answers nothing.
+#[test]
+fn the_broadcasted_event_carries_the_send_result() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+    for submit in [Some((true, "None")), Some((false, "DoubleSpend")), None] {
+        let (events, sent) = send_via_mock_node_with_events(&funded, &runtime, submit);
+
+        let stages: Vec<_> = events.iter().map(|e| format!("{:?}", e.stage)).collect();
+        assert_eq!(
+            stages,
+            [
+                "Initializing",
+                "ValidatingInput",
+                "ConnectingToNetwork",
+                "ConstructingTransaction",
+                "SigningKeyGeneration",
+                "SigningTransaction",
+                "Broadcasting",
+                "Broadcasted",
+            ],
+            "{submit:?}"
+        );
+        let (last, earlier) = events.split_last().expect("events");
+        assert!(
+            earlier.iter().all(|e| e.result.is_none()),
+            "only the last event carries a result ({submit:?})"
+        );
+        assert_eq!(last.details, "Transaction broadcast");
+        let result = last
+            .result
+            .as_ref()
+            .expect("Broadcasted carries the result");
+        assert_eq!(result.transaction.id, sent.transaction.id);
+        assert_eq!(result.accepted_by_node, sent.accepted_by_node);
+        assert_eq!(result.node_reason, sent.node_reason);
+        assert_eq!(result.note, sent.note);
+        assert!(!result.transaction.id.is_empty());
+
+        match submit {
+            Some((true, _)) => {
+                assert!(result.accepted_by_node);
+                assert_eq!(result.node_reason, None);
+            }
+            Some((false, _)) => {
+                assert!(!result.accepted_by_node);
+                assert_eq!(
+                    result.node_reason.as_deref(),
+                    Some("Transaction not accepted: Double Spend")
+                );
+                assert!(result.note.is_some(), "the user is told not to resend");
+            }
+            None => {
+                assert!(!result.accepted_by_node);
+                assert!(result.node_reason.is_some());
+            }
+        }
+    }
 }
 
 /// Record that the node refused the send's last rebroadcasts until it stalled, as
@@ -1362,6 +1450,438 @@ fn abandon_send_refuses_an_accepted_send_that_has_not_stalled() {
     );
 }
 
+/// An abandoned send that is mined after all: the scan that finds its change output
+/// flags it in `abandoned_then_mined_ids`, and `get_abandon_warnings` reports it as
+/// `MinedAfterAbandon`. The scan's event set is unchanged.
+#[test]
+fn an_abandoned_send_mined_after_all_is_reported() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+    assert!(get_abandon_warnings(FUNDED.to_string())
+        .expect("no warnings yet")
+        .is_empty());
+    assert_eq!(
+        get_abandon_warnings("missing".to_string())
+            .unwrap_err()
+            .to_string(),
+        "No accounts found for this wallet"
+    );
+
+    // Send through a node that answers nothing, keeping the signed transaction.
+    let (sent, transaction) = runtime.block_on(async {
+        let server = wiremock::MockServer::start().await;
+        let details = funded_send(
+            &funded,
+            vec![SendRecipient {
+                address: funded.recipient.clone(),
+                amount: 100_000,
+                payment_id: None,
+            }],
+            false,
+            server.uri(),
+        );
+        let sent = send_transaction_with_handler(details, |_| {})
+            .await
+            .expect("send");
+        let requests = server.received_requests().await.expect("recorded requests");
+        let body: serde_json::Value =
+            serde_json::from_slice(&requests.first().expect("a broadcast").body).expect("json");
+        let transaction: tari_transaction_components::transaction_components::Transaction =
+            serde_json::from_value(body["params"]["transaction"].clone()).expect("transaction");
+        (sent, transaction)
+    });
+    let tx_id = sent.transaction.id;
+
+    stall(&funded, &tx_id);
+    runtime
+        .block_on(abandon_send(
+            FUNDED.to_string(),
+            FUNDED_PASSPHRASE.to_string(),
+            tx_id.clone(),
+        ))
+        .expect("abandon_send");
+    assert!(
+        get_abandon_warnings(FUNDED.to_string())
+            .expect("abandoned, not mined")
+            .is_empty(),
+        "an abandon alone is no warning"
+    );
+
+    // The original is mined anyway, in the block after the wallet's tip.
+    let events = std::sync::Arc::new(Mutex::new(Vec::new()));
+    runtime
+        .block_on(async {
+            let server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::any())
+                .respond_with(MockChain {
+                    mined: Some(transaction),
+                })
+                .mount(&server)
+                .await;
+            let sink = events.clone();
+            start_scan_with_handler(
+                create_scan_handle(FUNDED.to_string()).expect("handle"),
+                scan_config(FUNDED, server.uri()),
+                move |event| {
+                    sink.lock().unwrap().push(event);
+                    Ok(())
+                },
+            )
+            .await
+        })
+        .expect("start_scan");
+
+    let warnings = get_abandon_warnings(FUNDED.to_string()).expect("warnings");
+    assert_eq!(warnings.len(), 1, "got {warnings:?}");
+    assert_eq!(warnings[0].transaction_id, tx_id);
+    assert_eq!(warnings[0].kind, AbandonWarningKind::MinedAfterAbandon);
+    assert!(warnings[0].event_id > 0);
+
+    let events = events.lock().unwrap();
+    let flagged: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            ScanEventDto::TransactionsReady(e) => e.abandoned_then_mined_ids.clone(),
+            ScanEventDto::TransactionsUpdated(e) => e.abandoned_then_mined_ids.clone(),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            ScanEventDto::TransactionsReady(e)
+                if e.abandoned_then_mined_ids.as_deref() == Some(std::slice::from_ref(&tx_id))
+                    && e.transactions.iter().any(|t| t.id == tx_id)
+        )),
+        "the TransactionsReady carrying the mined send flags it, got {events:?}"
+    );
+    assert!(
+        flagged
+            .iter()
+            .all(|ids| ids == std::slice::from_ref(&tx_id)),
+        "only the abandoned send is flagged, got {flagged:?}"
+    );
+    assert!(
+        matches!(
+            events.last(),
+            Some(ScanEventDto::Completed {
+                final_height,
+                ..
+            }) if *final_height == MOCK_TIP + 1
+        ),
+        "got {events:?}"
+    );
+    assert_eq!(events.iter().filter(|e| is_terminal(e)).count(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Paying again after an abandon: `conflicts_with_transaction_id`.
+// ---------------------------------------------------------------------------
+
+/// One Tari, in microTari.
+const T: u64 = 1_000_000;
+
+const NOT_AN_ABANDONED_SEND: &str =
+    "Wallet Error: The transaction to conflict with is not an abandoned send of this wallet";
+const NO_SPENDABLE_RELEASED_INPUT: &str = "Wallet Error: None of the abandoned send's inputs can be spent; check the wallet's transactions before paying again";
+
+/// A send of `amount` from `wallet_name` to the fixture wallet through a node that
+/// answers nothing, optionally conflicting with the abandoned send
+/// `conflicts_with`. Returns the streamed events, the result and the transaction
+/// that was broadcast, or the send's error.
+fn send_and_capture(
+    funded: &FundedWallet,
+    runtime: &tokio::runtime::Runtime,
+    wallet_name: &str,
+    amount: u64,
+    conflicts_with: Option<&str>,
+) -> anyhow::Result<(
+    Vec<SendTransactionEvent>,
+    SendResultDto,
+    tari_transaction_components::transaction_components::Transaction,
+)> {
+    let events = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let (sent, transaction) = runtime.block_on(async {
+        let server = wiremock::MockServer::start().await;
+        let details = MultiSendTransactionDetails {
+            wallet_name: wallet_name.to_string(),
+            conflicts_with_transaction_id: conflicts_with.map(str::to_string),
+            ..funded_send(
+                funded,
+                vec![SendRecipient {
+                    address: funded.recipient.clone(),
+                    amount,
+                    payment_id: None,
+                }],
+                false,
+                server.uri(),
+            )
+        };
+        let sink = events.clone();
+        let sent =
+            send_transaction_with_handler(details, move |event| sink.lock().unwrap().push(event))
+                .await?;
+        let requests = server.received_requests().await.expect("recorded requests");
+        let body: serde_json::Value =
+            serde_json::from_slice(&requests.first().expect("a broadcast").body).expect("json");
+        let transaction =
+            serde_json::from_value(body["params"]["transaction"].clone()).expect("transaction");
+        anyhow::Ok((sent, transaction))
+    })?;
+    let events = std::mem::take(&mut *events.lock().unwrap());
+    Ok((events, sent, transaction))
+}
+
+/// The error of a send that must be refused.
+fn refused<T>(result: anyhow::Result<T>) -> anyhow::Error {
+    match result {
+        Ok(_) => panic!("the send must be refused"),
+        Err(e) => e,
+    }
+}
+
+/// The output hashes `transaction` spends.
+fn input_hashes(
+    transaction: &tari_transaction_components::transaction_components::Transaction,
+) -> Vec<Vec<u8>> {
+    transaction
+        .body()
+        .inputs()
+        .iter()
+        .map(|input| input.output_hash().to_vec())
+        .collect()
+}
+
+/// The hash of `wallet_name`'s one output worth `value`.
+fn output_hash_of(funded: &FundedWallet, wallet_name: &str, value: u64) -> Vec<u8> {
+    let pool = minotari_wallet::db::init_db(funded.db.db_path.clone()).expect("pool");
+    let conn = pool.get().expect("conn");
+    let account = minotari_wallet::db::get_account_by_name(&conn, wallet_name)
+        .expect("account")
+        .expect("account exists");
+    conn.query_row(
+        "SELECT output_hash FROM outputs WHERE account_id = ?1 AND value = ?2 AND deleted_at IS NULL",
+        rusqlite::params![account.id, i64::try_from(value).expect("value")],
+        |row| row.get(0),
+    )
+    .expect("one output of that value")
+}
+
+/// Send `amount` from the funded wallet, let it stall and abandon it. Returns its id
+/// and the transaction that was broadcast.
+fn abandoned_send(
+    funded: &FundedWallet,
+    runtime: &tokio::runtime::Runtime,
+    amount: u64,
+) -> (
+    String,
+    tari_transaction_components::transaction_components::Transaction,
+) {
+    let (_, sent, transaction) =
+        send_and_capture(funded, runtime, FUNDED, amount, None).expect("send");
+    let tx_id = sent.transaction.id;
+    stall(funded, &tx_id);
+    runtime
+        .block_on(abandon_send(
+            FUNDED.to_string(),
+            FUNDED_PASSPHRASE.to_string(),
+            tx_id.clone(),
+        ))
+        .expect("abandon_send");
+    (tx_id, transaction)
+}
+
+/// A wallet holding 10 T and 3 T sends 3 T, which spends the 10; the send stalls and
+/// is abandoned, then the wallet receives 50 T. Paying again with
+/// `conflicts_with_transaction_id` spends the released 10, not the 50, so the resend
+/// shares an input with the original and the two can never both be mined.
+#[test]
+fn a_conflicting_resend_spends_the_abandoned_sends_released_input() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet_holding(&[10 * T, 3 * T]);
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let ten = output_hash_of(&funded, FUNDED, 10 * T);
+
+    let (original_id, original) = abandoned_send(&funded, &runtime, 3 * T);
+    assert_eq!(
+        input_hashes(&original),
+        vec![ten.clone()],
+        "the original spends the 10"
+    );
+
+    fixture::add_spendable_outputs(&funded.db.db_path, FUNDED, FUNDED_PASSPHRASE, &[50 * T])
+        .expect("receive 50 T");
+    let fifty = output_hash_of(&funded, FUNDED, 50 * T);
+
+    let (events, resent, resend) =
+        send_and_capture(&funded, &runtime, FUNDED, 3 * T, Some(&original_id)).expect("the resend");
+    let inputs = input_hashes(&resend);
+    assert!(inputs.contains(&ten), "the resend spends the released 10");
+    assert!(!inputs.contains(&fifty), "the resend does not spend the 50");
+    assert!(
+        inputs
+            .iter()
+            .any(|input| input_hashes(&original).contains(input)),
+        "the resend shares an input with the original"
+    );
+    assert_ne!(resent.transaction.id, original_id);
+
+    // The stream is a normal send's: same stages, `result` only on the last.
+    let stages: Vec<_> = events.iter().map(|e| format!("{:?}", e.stage)).collect();
+    assert_eq!(
+        stages,
+        [
+            "Initializing",
+            "ValidatingInput",
+            "ConnectingToNetwork",
+            "ConstructingTransaction",
+            "SigningKeyGeneration",
+            "SigningTransaction",
+            "Broadcasting",
+            "Broadcasted",
+        ]
+    );
+    let result = events
+        .last()
+        .and_then(|e| e.result.as_ref())
+        .expect("result");
+    assert_eq!(result.transaction.id, resent.transaction.id);
+}
+
+/// Control for the test above, documenting the double-pay hazard: the same resend
+/// **without** `conflicts_with_transaction_id` spends the 50 and shares no input with
+/// the original, so both can be mined.
+#[test]
+fn a_plain_resend_after_an_abandon_can_miss_the_released_input() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet_holding(&[10 * T, 3 * T]);
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+    let (_, original) = abandoned_send(&funded, &runtime, 3 * T);
+    fixture::add_spendable_outputs(&funded.db.db_path, FUNDED, FUNDED_PASSPHRASE, &[50 * T])
+        .expect("receive 50 T");
+    let fifty = output_hash_of(&funded, FUNDED, 50 * T);
+
+    let (_, _, resend) =
+        send_and_capture(&funded, &runtime, FUNDED, 3 * T, None).expect("the plain resend");
+    let inputs = input_hashes(&resend);
+    assert_eq!(inputs, vec![fifty], "plain selection picks the 50");
+    assert!(
+        !inputs
+            .iter()
+            .any(|input| input_hashes(&original).contains(input)),
+        "the plain resend shares no input with the original"
+    );
+}
+
+/// A `conflicts_with_transaction_id` that is not a number, not a send of the wallet,
+/// or a send that is not abandoned is refused before anything is reserved.
+#[test]
+fn a_resend_conflicting_with_a_send_that_is_not_abandoned_is_refused() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+    // Pending, not abandoned.
+    let (_, pending, _) = send_and_capture(&funded, &runtime, FUNDED, 100_000, None).expect("send");
+    let locked = get_balance(FUNDED.to_string()).unwrap().locked;
+    assert!(locked > 0);
+
+    for (id, expected) in [
+        (pending.transaction.id.as_str(), NOT_AN_ABANDONED_SEND),
+        ("999", NOT_AN_ABANDONED_SEND),
+        ("not-a-number", "Wallet Error: Invalid transaction id"),
+    ] {
+        let err = refused(send_and_capture(
+            &funded,
+            &runtime,
+            FUNDED,
+            100_000,
+            Some(id),
+        ));
+        assert_eq!(err.to_string(), expected, "{id}");
+    }
+
+    // Stalled but not abandoned yet.
+    stall(&funded, &pending.transaction.id);
+    let err = refused(send_and_capture(
+        &funded,
+        &runtime,
+        FUNDED,
+        100_000,
+        Some(&pending.transaction.id),
+    ));
+    assert_eq!(err.to_string(), NOT_AN_ABANDONED_SEND);
+    assert_eq!(
+        get_balance(FUNDED.to_string()).unwrap().locked,
+        locked,
+        "nothing more was reserved"
+    );
+}
+
+/// Another wallet's abandoned send is not one to conflict with.
+#[test]
+fn a_resend_conflicting_with_another_wallets_abandoned_send_is_refused() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+    restore_wallet(
+        "other".to_string(),
+        fixture::random_seed_words(),
+        "pw2".to_string(),
+        Some(TariNetwork::Esmeralda),
+    )
+    .expect("restore_wallet");
+    fixture::add_spendable_outputs(&funded.db.db_path, "other", "pw2", &FUNDED_VALUES)
+        .expect("fund");
+    funded.db.unlock("other", "pw2").expect("unlock");
+
+    let (abandoned_id, _) = abandoned_send(&funded, &runtime, 100_000);
+    let err = refused(send_and_capture(
+        &funded,
+        &runtime,
+        "other",
+        100_000,
+        Some(&abandoned_id),
+    ));
+    assert_eq!(err.to_string(), NOT_AN_ABANDONED_SEND);
+    assert_eq!(get_balance("other".to_string()).unwrap().locked, 0);
+}
+
+/// When every input the abandoned send released has been spent again (here by a plain
+/// send still pending), the original can no longer be mined and the resend is refused:
+/// the caller should check the wallet's transactions before paying again.
+#[test]
+fn a_resend_whose_released_inputs_are_all_spent_again_is_refused() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet_holding(&[10 * T, 3 * T]);
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let ten = output_hash_of(&funded, FUNDED, 10 * T);
+
+    let (original_id, _) = abandoned_send(&funded, &runtime, 3 * T);
+    let (_, _, plain) =
+        send_and_capture(&funded, &runtime, FUNDED, 3 * T, None).expect("a plain resend");
+    assert_eq!(input_hashes(&plain), vec![ten], "it spends the released 10");
+    let locked = get_balance(FUNDED.to_string()).unwrap().locked;
+
+    let err = refused(send_and_capture(
+        &funded,
+        &runtime,
+        FUNDED,
+        3 * T,
+        Some(&original_id),
+    ));
+    assert_eq!(err.to_string(), NO_SPENDABLE_RELEASED_INPUT);
+    assert_eq!(
+        get_balance(FUNDED.to_string()).unwrap().locked,
+        locked,
+        "nothing more was reserved"
+    );
+}
+
 /// A view-only wallet sending with its stored keys is refused before anything is
 /// locked.
 #[test]
@@ -1380,6 +1900,7 @@ fn view_only_wallet_cannot_send_with_stored_keys() {
         }],
         send_all: false,
         confirmation_window: None,
+        conflicts_with_transaction_id: None,
     };
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let err = runtime
@@ -1401,7 +1922,40 @@ fn view_only_wallet_cannot_send_with_stored_keys() {
 /// A mock base node whose chain runs to `MOCK_TIP` with no wallet outputs. Its tip
 /// matches the funded wallet's scanned tip, so a plain scan of that wallet resumes
 /// with nothing to do and only a rollback removes its outputs.
-struct MockChain;
+///
+/// With `mined` set, the chain has one more block, at `MOCK_TIP + 1`, holding that
+/// transaction (its outputs, and its inputs as spent output hashes).
+#[derive(Default)]
+struct MockChain {
+    mined: Option<tari_transaction_components::transaction_components::Transaction>,
+}
+
+impl MockChain {
+    fn tip(&self) -> u64 {
+        MOCK_TIP + u64::from(self.mined.is_some())
+    }
+
+    /// The outputs and spent output hashes of the block at `height`.
+    fn block_contents(
+        &self,
+        height: u64,
+    ) -> (
+        Vec<tari_transaction_components::transaction_components::TransactionOutput>,
+        Vec<Vec<u8>>,
+    ) {
+        match &self.mined {
+            Some(tx) if height == MOCK_TIP + 1 => (
+                tx.body().outputs().to_vec(),
+                tx.body()
+                    .inputs()
+                    .iter()
+                    .map(|input| input.output_hash().to_vec())
+                    .collect(),
+            ),
+            _ => (Vec::new(), Vec::new()),
+        }
+    }
+}
 
 const MOCK_TIP: u64 = fixture::FUNDED_TIP_HEIGHT as u64;
 
@@ -1421,16 +1975,19 @@ fn mock_query(request: &wiremock::Request, name: &str) -> String {
 impl wiremock::Respond for MockChain {
     fn respond(&self, request: &wiremock::Request) -> wiremock::ResponseTemplate {
         use tari_transaction_components::rpc::models::{
-            BlockUtxoInfo, SyncUtxosByBlockResponseV0, SyncUtxosByBlockResponseV1,
+            BlockUtxoInfo, GetUtxosByBlockResponse, MinimalUtxoSyncInfo,
+            SyncUtxosByBlockResponseV0, SyncUtxosByBlockResponseV1,
         };
         use tari_utilities::hex::from_hex;
+        use tari_utilities::ByteArray;
         use wiremock::ResponseTemplate;
 
+        let tip = self.tip();
         match request.url.path() {
             "/get_tip_info" => ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "metadata": {
-                    "best_block_height": MOCK_TIP,
-                    "best_block_hash": mock_block_hash(MOCK_TIP),
+                    "best_block_height": tip,
+                    "best_block_hash": mock_block_hash(tip),
                     "accumulated_difficulty": "0",
                     "pruned_height": 0,
                     "timestamp": 0,
@@ -1439,7 +1996,7 @@ impl wiremock::Respond for MockChain {
             "/get_height_at_time" => ResponseTemplate::new(200).set_body_json(0u64),
             "/get_header_by_height" => {
                 let height: u64 = mock_query(request, "height").parse().expect("height");
-                if height > MOCK_TIP {
+                if height > tip {
                     return ResponseTemplate::new(404);
                 }
                 ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -1452,17 +2009,31 @@ impl wiremock::Respond for MockChain {
                 let start_hash = from_hex(&mock_query(request, "start_header_hash")).expect("hex");
                 let start = u64::from_be_bytes(start_hash[0..8].try_into().expect("8 bytes"));
                 let limit: u64 = mock_query(request, "limit").parse().expect("limit");
-                let last = (start + limit - 1).min(MOCK_TIP);
+                let last = (start + limit - 1).min(tip);
                 let blocks = (start..=last)
-                    .map(|height| BlockUtxoInfo {
-                        header_hash: mock_block_hash(height),
-                        height,
-                        outputs: Vec::new(),
-                        inputs: Vec::new(),
-                        mined_timestamp: 1_700_000_000,
+                    .map(|height| {
+                        let (outputs, inputs) = self.block_contents(height);
+                        BlockUtxoInfo {
+                            header_hash: mock_block_hash(height),
+                            height,
+                            outputs: outputs
+                                .iter()
+                                .map(|output| MinimalUtxoSyncInfo {
+                                    output_hash: output.hash().to_vec(),
+                                    commitment: output.commitment.as_bytes().to_vec(),
+                                    encrypted_data: output.encrypted_data.to_byte_vec(),
+                                    sender_offset_public_key: output
+                                        .sender_offset_public_key
+                                        .as_bytes()
+                                        .to_vec(),
+                                })
+                                .collect(),
+                            inputs,
+                            mined_timestamp: 1_700_000_000,
+                        }
                     })
                     .collect();
-                let next_header_to_scan = if last < MOCK_TIP {
+                let next_header_to_scan = if last < tip {
                     mock_block_hash(last + 1)
                 } else {
                     Vec::new()
@@ -1474,6 +2045,17 @@ impl wiremock::Respond for MockChain {
                         next_header_to_scan,
                     },
                 ))
+            }
+            "/get_utxos_by_block" => {
+                let hash = from_hex(&mock_query(request, "header_hash")).expect("hex");
+                let height = u64::from_be_bytes(hash[0..8].try_into().expect("8 bytes"));
+                let (outputs, _) = self.block_contents(height);
+                ResponseTemplate::new(200).set_body_json(GetUtxosByBlockResponse {
+                    header_hash: hash,
+                    height,
+                    outputs,
+                    mined_timestamp: 1_700_000_000,
+                })
             }
             _ => ResponseTemplate::new(404),
         }

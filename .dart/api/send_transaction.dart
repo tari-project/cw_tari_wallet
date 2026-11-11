@@ -8,14 +8,15 @@ import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'transactions.dart';
 
-// These functions are ignored because they are not marked as `pub`: `build_unsigned_transaction`, `build_while_unlocked`, `confirm_own_payload`, `create_transaction_sender`, `map_signing_error`, `release_send_reservation`, `same_account`, `stored_key_manager`, `unlocked_in`, `validate_inputs`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ValidatedInputs`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `from`
+// These functions are ignored because they are not marked as `pub`: `abandon_warnings`, `build_unsigned_transaction`, `build_while_unlocked`, `confirm_own_payload`, `create_transaction_sender`, `ensure_conflicts`, `map_signing_error`, `output_hash`, `parse_transaction_id`, `release_send_reservation`, `resolve_conflict`, `same_account`, `stored_key_manager`, `unlocked_in`, `validate_inputs`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `Conflict`, `ValidatedInputs`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `send_transaction_at_fee_with_handler`, `send_transaction_with_handler`
 
 /// Give up a stalled send and release its inputs.
 ///
-/// `transaction_id` is the send's `DisplayedTransactionDto.id`; `passphrase`
+/// `transaction_id` is the send's `DisplayedTransactionDto.id` (for a send made with
+/// [`send_transaction`]: `result.transaction.id` of its `Broadcasted` event); `passphrase`
 /// (**secret**) must open wallet `wallet_name`. Delegates to minotari, which only
 /// abandons a send that is not mined and has stalled: the node refused its last
 /// rebroadcasts in a row (rebroadcasts happen while a scan runs, so keep scanning
@@ -28,10 +29,16 @@ import 'transactions.dart';
 ///
 /// The original can still be mined if a node holds it. Right after an abandon,
 /// `Rejected` means "not known to be mined", not "will not be mined": do not treat it
-/// as proof until later scans from a trusted node still show it rejected. If you pay
-/// the payee again, prefer a send that spends the same inputs, so it conflicts with
-/// the original instead of paying twice. minotari selects the largest outputs first,
-/// so a same-amount resend usually picks the released inputs again.
+/// as proof until later scans from a trusted node still show it rejected. Pay the
+/// payee again **only** with a send whose
+/// [`MultiSendTransactionDetails::conflicts_with_transaction_id`] is this
+/// `transaction_id`: that send spends the released inputs, so it and the original can
+/// never both be mined. Whichever is mined first invalidates the other, and the scan
+/// reports the loser as rejected. A send without it selects inputs on its own and can
+/// pay twice. If the original is accepted or mined after all,
+/// [`get_abandon_warnings`] reports it (and the scan event that carries it lists it in
+/// `abandoned_then_mined_ids`): check it after each scan event and at startup, and
+/// warn the user that a payment made again may have paid twice.
 ///
 /// Errors: `Invalid Passphrase`, `No accounts found for this wallet`,
 /// `Wallet Error: Invalid transaction id`, `Wallet Error: The send has not stalled
@@ -49,12 +56,33 @@ Future<String> abandonSend(
         passphrase: passphrase,
         transactionId: transactionId);
 
+/// The sends of `wallet_name` that were accepted by a node or mined after the user
+/// abandoned them, one entry per send, ordered by `event_id`.
+///
+/// Read-only and offline: reads the wallet's stored events, so it needs a database
+/// path (`set_database_path` or `unlock_wallet`) but not an unlocked wallet, and it
+/// also sees what another process scanning the same database recorded. Call it at
+/// startup and after each `TransactionsReady` / `TransactionsUpdated` (whose
+/// `abandoned_then_mined_ids` flags the mined case as it is found). For a
+/// `MinedAfterAbandon` entry, warn the user that a send they abandoned was mined, so a
+/// payment made again since may have paid twice; nothing is done automatically. An
+/// entry is never withdrawn. Synchronous.
+///
+/// Errors: `Database is not initialized`, `No accounts found for this wallet`,
+/// `Database Error: …`.
+Future<List<AbandonWarningDto>> getAbandonWarnings(
+        {required String walletName}) =>
+    RustLib.instance.api
+        .crateApiSendTransactionGetAbandonWarnings(walletName: walletName);
+
 /// Pay one or more recipients in one transaction, or sweep the wallet to one
 /// recipient (`details.send_all`), streaming progress.
 ///
 /// Streams a [`SendTransactionEvent`] for each [`TransactionStage`] over `sink` and
 /// resolves to a [`SendResultDto`]: the recorded, `Pending` transaction plus whether
-/// the node accepted it. The wallet must be unlocked; no seed words or passphrase are
+/// the node accepted it. FRB does not hand that return value to Dart, so the final
+/// `Broadcasted` event carries the same value in its `result` field; read the
+/// outcome there. The wallet must be unlocked; no seed words or passphrase are
 /// needed. Each recipient gets its own output carrying its own `payment_id`.
 ///
 /// `Ok` means the send is recorded, not necessarily accepted by the node; the scan's
@@ -88,6 +116,47 @@ Stream<SendTransactionEvent> sendTransactionAtFee(
     RustLib.instance.api.crateApiSendTransactionSendTransactionAtFee(
         details: details, feePerGram: feePerGram);
 
+/// A send the user abandoned ([`abandon_send`]) that a node accepted or that was
+/// mined after all, from [`get_abandon_warnings`].
+///
+/// `transaction_id` is the send's `DisplayedTransactionDto.id`; `event_id` is the id
+/// of the wallet event that raised the warning (increasing over time, so an app can
+/// remember the highest one it has shown).
+class AbandonWarningDto {
+  final String transactionId;
+  final AbandonWarningKind kind;
+  final PlatformInt64 eventId;
+
+  const AbandonWarningDto({
+    required this.transactionId,
+    required this.kind,
+    required this.eventId,
+  });
+
+  @override
+  int get hashCode => transactionId.hashCode ^ kind.hashCode ^ eventId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AbandonWarningDto &&
+          runtimeType == other.runtimeType &&
+          transactionId == other.transactionId &&
+          kind == other.kind &&
+          eventId == other.eventId;
+}
+
+/// What happened to a send after the user abandoned it, in an [`AbandonWarningDto`].
+///
+/// `MinedAfterAbandon`: the send was mined after all, so a payment made again after
+/// the abandon may have paid the payee twice. `AcceptedAfterAbandon`: a node accepted
+/// a rebroadcast of it after the abandon (it may still be mined).
+enum AbandonWarningKind {
+  acceptedAfterAbandon,
+  minedAfterAbandon,
+  ;
+}
+
 /// Inputs to [`send_transaction`].
 ///
 /// `wallet_name` selects the account, which signs with its unlocked key session
@@ -99,6 +168,23 @@ Stream<SendTransactionEvent> sendTransactionAtFee(
 /// (`None` → 3). With `send_all` set, `recipients` must hold exactly one entry and it
 /// receives every spendable output less the fee; quote that first with
 /// [`estimate_send_all_fee`](crate::api::fee::estimate_send_all_fee).
+///
+/// `conflicts_with_transaction_id` is for paying again after [`abandon_send`]: set it
+/// to the abandoned send's id (the `transaction_id` given to `abandon_send`), and pay
+/// the payee again **only** this way. The send then spends every input the abandoned
+/// send released that is still spendable (topped up from other outputs as needed), so
+/// it and the original can never both be mined: whichever is mined first invalidates
+/// the other, and the scan reports the loser as rejected. It is refused, before any
+/// UTXO is reserved, with `Wallet Error: Invalid transaction id` (not a number),
+/// `Wallet Error: The transaction to conflict with is not an abandoned send of this
+/// wallet` (unknown, another wallet's, not abandoned, or abandoned and since mined) or
+/// `Wallet Error: None of the abandoned send's inputs can be spent; check the wallet's
+/// transactions before paying again` (each was spent elsewhere, so the original can no
+/// longer be mined, or is held by another pending send), or `Wallet Error: …` with
+/// minotari's reason if the abandoned send's stored transaction cannot be read; and,
+/// as a final check before signing, with `Wallet Error: The resend does not conflict
+/// with the abandoned send` (its reservation is released). `None` sends exactly as
+/// before.
 class MultiSendTransactionDetails {
   final TariNetwork? network;
   final String? baseUrl;
@@ -106,6 +192,7 @@ class MultiSendTransactionDetails {
   final List<SendRecipient> recipients;
   final bool sendAll;
   final BigInt? confirmationWindow;
+  final String? conflictsWithTransactionId;
 
   const MultiSendTransactionDetails({
     this.network,
@@ -114,6 +201,7 @@ class MultiSendTransactionDetails {
     required this.recipients,
     required this.sendAll,
     this.confirmationWindow,
+    this.conflictsWithTransactionId,
   });
 
   @override
@@ -123,7 +211,8 @@ class MultiSendTransactionDetails {
       walletName.hashCode ^
       recipients.hashCode ^
       sendAll.hashCode ^
-      confirmationWindow.hashCode;
+      confirmationWindow.hashCode ^
+      conflictsWithTransactionId.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -135,7 +224,8 @@ class MultiSendTransactionDetails {
           walletName == other.walletName &&
           recipients == other.recipients &&
           sendAll == other.sendAll &&
-          confirmationWindow == other.confirmationWindow;
+          confirmationWindow == other.confirmationWindow &&
+          conflictsWithTransactionId == other.conflictsWithTransactionId;
 }
 
 /// One payee of a [`send_transaction`].
@@ -166,7 +256,8 @@ class SendRecipient {
           paymentId == other.paymentId;
 }
 
-/// The outcome of a [`send_transaction`].
+/// The outcome of a [`send_transaction`], delivered to Dart as the `result` of the
+/// final `Broadcasted` [`SendTransactionEvent`].
 ///
 /// `transaction` is the recorded send, pending until the scan sees it mined.
 /// `accepted_by_node` is whether the node took the first broadcast (or already had
@@ -210,17 +301,28 @@ class SendResultDto {
 
 /// A progress event streamed during [`send_transaction`]: the current
 /// [`TransactionStage`] plus a human-readable `details` message.
+///
+/// `result` is the send's outcome, the same [`SendResultDto`] the call resolves to
+/// (FRB does not deliver a streaming fn's return value to Dart, so this is how Dart
+/// learns it). It is set only on the final `Broadcasted` event and `None` on every
+/// other stage. Read `result.transaction.id` (the id [`abandon_send`] takes),
+/// `result.accepted_by_node`, `result.node_reason` and `result.note` from it; when
+/// `accepted_by_node` is `false` the send is recorded and rebroadcast, so **do not
+/// send it again**. A send that fails before `Broadcasted` emits no `result` and
+/// resolves to the error instead.
 class SendTransactionEvent {
   final TransactionStage stage;
   final String details;
+  final SendResultDto? result;
 
   const SendTransactionEvent({
     required this.stage,
     required this.details,
+    this.result,
   });
 
   @override
-  int get hashCode => stage.hashCode ^ details.hashCode;
+  int get hashCode => stage.hashCode ^ details.hashCode ^ result.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -228,7 +330,8 @@ class SendTransactionEvent {
       other is SendTransactionEvent &&
           runtimeType == other.runtimeType &&
           stage == other.stage &&
-          details == other.details;
+          details == other.details &&
+          result == other.result;
 }
 
 /// The lifecycle stage of an in-flight send, carried on each

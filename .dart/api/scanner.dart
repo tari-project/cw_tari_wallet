@@ -9,7 +9,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 import 'transactions.dart';
 part 'scanner.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `begin_maintenance`, `build_scanner`, `cancel_wallet_scans`, `capped_threads`, `check_rescan_height`, `claim_and_scan`, `clear_scan_if_current`, `is_terminal`, `maintenance_lock`, `map_processing_event`, `rollback_account`, `run_forwarder`, `run_scan`, `scan_failure`, `scan_in_slot`, `scan`, `stop_wallet_scans`, `stopped_event`, `take_slot`, `write_state`
+// These functions are ignored because they are not marked as `pub`: `abandon_hint`, `begin_maintenance`, `build_scanner`, `cancel_wallet_scans`, `capped_threads`, `check_rescan_height`, `claim_and_scan`, `clear_scan_if_current`, `is_terminal`, `maintenance_lock`, `map_processing_event`, `rollback_account`, `run_forwarder`, `run_scan`, `scan_failure`, `scan_in_slot`, `scan`, `stop_wallet_scans`, `stopped_event`, `take_slot`, `with_abandon_hint`, `write_state`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ScanController`, `ScanState`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `rescan_with_handler`, `start_scan_with_handler`
@@ -264,17 +264,25 @@ enum ScanPriority {
 ///
 /// `block_height` is the block they were found at (when known); `is_initial_sync`
 /// is `true` while catching up history versus live tip-following.
+///
+/// `abandoned_then_mined_ids` lists the `transactions` (by `id`) that are sends the
+/// user abandoned ([`abandon_send`](crate::api::send_transaction::abandon_send)) and
+/// that were mined after all: a payment made again since may have paid twice. `None`
+/// when there are none (or the check could not be made); see
+/// [`get_abandon_warnings`](crate::api::send_transaction::get_abandon_warnings).
 class TransactionsReadyDto {
   final PlatformInt64 accountId;
   final List<DisplayedTransactionDto> transactions;
   final BigInt? blockHeight;
   final bool isInitialSync;
+  final List<String>? abandonedThenMinedIds;
 
   const TransactionsReadyDto({
     required this.accountId,
     required this.transactions,
     this.blockHeight,
     required this.isInitialSync,
+    this.abandonedThenMinedIds,
   });
 
   @override
@@ -282,7 +290,8 @@ class TransactionsReadyDto {
       accountId.hashCode ^
       transactions.hashCode ^
       blockHeight.hashCode ^
-      isInitialSync.hashCode;
+      isInitialSync.hashCode ^
+      abandonedThenMinedIds.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -292,23 +301,32 @@ class TransactionsReadyDto {
           accountId == other.accountId &&
           transactions == other.transactions &&
           blockHeight == other.blockHeight &&
-          isInitialSync == other.isInitialSync;
+          isInitialSync == other.isInitialSync &&
+          abandonedThenMinedIds == other.abandonedThenMinedIds;
 }
 
 /// Status updates to already-known transactions (e.g. newly confirmed), carried
 /// inside [`ScanEventDto::TransactionsUpdated`]. This is how a send's confirmation is
 /// reported.
+///
+/// `abandoned_then_mined_ids` is as on [`TransactionsReadyDto`], for
+/// `updated_transactions`.
 class TransactionsUpdatedDto {
   final PlatformInt64 accountId;
   final List<DisplayedTransactionDto> updatedTransactions;
+  final List<String>? abandonedThenMinedIds;
 
   const TransactionsUpdatedDto({
     required this.accountId,
     required this.updatedTransactions,
+    this.abandonedThenMinedIds,
   });
 
   @override
-  int get hashCode => accountId.hashCode ^ updatedTransactions.hashCode;
+  int get hashCode =>
+      accountId.hashCode ^
+      updatedTransactions.hashCode ^
+      abandonedThenMinedIds.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -316,5 +334,6 @@ class TransactionsUpdatedDto {
       other is TransactionsUpdatedDto &&
           runtimeType == other.runtimeType &&
           accountId == other.accountId &&
-          updatedTransactions == other.updatedTransactions;
+          updatedTransactions == other.updatedTransactions &&
+          abandonedThenMinedIds == other.abandonedThenMinedIds;
 }
