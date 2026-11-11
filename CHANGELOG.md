@@ -41,6 +41,9 @@ diff) before the version is tagged.
   the given rate (µT per gram) instead of the fixed 5. The rate is exact; the fee is
   exactly the quote only for a send-all (a normal send's fee estimate stays an estimate).
 - `estimate_send_all_fee_at(…, fee_per_gram)`: the send-all quote at that rate.
+- `get_fee_per_gram(priority, base_url)`: the node's rate for a priority, capped as in
+  fee estimates, without reading the wallet (errors `Failed to get the fee per gram` only
+  for an unusable `base_url`).
 - Both refuse a rate of 0 or above 100 µT/gram, before any UTXO is reserved, with the
   new error `Invalid fee per gram: <rate> (must be 1 to 100 microTari per gram)`.
 

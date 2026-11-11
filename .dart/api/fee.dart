@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `cap`, `capped_estimate`, `estimate_fee`
+// These functions are ignored because they are not marked as `pub`: `cap`, `capped_estimate`, `estimate_fee`, `node_rates`, `rate_for`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `from`
 
 /// Estimate the fee to send `amount` (in **microTari**) at the given `priority`.
@@ -45,6 +45,21 @@ Future<FeeEstimate> estimateTransactionFeeForOutputs(
         priority: priority,
         baseUrl: baseUrl,
         walletName: walletName);
+
+/// The fee per gram (µT) the node suggests for `priority`, held between minotari's
+/// minimum and the most a send accepts: the rate a
+/// [`FeeEstimate`] for that priority reports, without reading the wallet or selecting
+/// inputs. Pass it to
+/// [`estimate_send_all_fee_at`] and
+/// [`send_transaction_at_fee`](crate::api::send_transaction::send_transaction_at_fee).
+///
+/// `base_url` is the base node RPC endpoint. Async; performs network I/O. A node that
+/// gives no fee statistics gets minotari's defaults (Slow 1, Medium 5, Fast 10). Errors
+/// with `Failed to get the fee per gram` only if `base_url` is unusable.
+Future<BigInt> getFeePerGram(
+        {required FeePriority priority, required String baseUrl}) =>
+    RustLib.instance.api
+        .crateApiFeeGetFeePerGram(priority: priority, baseUrl: baseUrl);
 
 /// Quote a send-all of wallet `wallet_name` to `recipient_address`.
 ///

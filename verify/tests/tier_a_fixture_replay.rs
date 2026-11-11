@@ -25,7 +25,7 @@ use minotari_wallet_ffi::api::balance::get_balance;
 use minotari_wallet_ffi::api::db::{lock_wallet, set_database_path, unlock_wallet};
 use minotari_wallet_ffi::api::fee::{
     estimate_send_all_fee, estimate_send_all_fee_at, estimate_transaction_fee_for_outputs,
-    FeePriority,
+    get_fee_per_gram, FeePriority,
 };
 use minotari_wallet_ffi::api::network::current_network;
 use minotari_wallet_ffi::api::network::TariNetwork;
@@ -994,6 +994,71 @@ async fn broadcast_kernel_fee(server: &wiremock::MockServer) -> u64 {
     body["params"]["transaction"]["body"]["kernels"][0]["fee"]
         .as_u64()
         .expect("kernel fee")
+}
+
+/// A normal send is built at the rate it is given: the same send from the same wallet
+/// state pays 4x the fee at 20 µT/gram as at 5.
+#[test]
+fn a_normal_send_is_built_at_the_given_rate() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let kernel_fee_at = |rate: u64| {
+        let funded = with_funded_wallet();
+        runtime.block_on(async {
+            let server = wiremock::MockServer::start().await;
+            let details = funded_send(
+                &funded,
+                vec![SendRecipient {
+                    address: funded.recipient.clone(),
+                    amount: 100_000,
+                    payment_id: None,
+                }],
+                false,
+                server.uri(),
+            );
+            send_transaction_at_fee_with_handler(details, rate, |_| {})
+                .await
+                .expect("send");
+            broadcast_kernel_fee(&server).await
+        })
+    };
+    let at_default = kernel_fee_at(5);
+    let at_twenty = kernel_fee_at(20);
+    assert!(at_default > 0);
+    assert_eq!(at_twenty, 4 * at_default);
+}
+
+/// The rate alone is the estimate's rate: capped, floored at minotari's minimum, and
+/// minotari's defaults when the node has no statistics.
+#[test]
+fn the_fee_per_gram_is_the_capped_node_rate() {
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    runtime.block_on(async {
+        let rates = |stats: &'static [(u64, u64)]| async move {
+            let server = node_with_fee_stats(stats).await;
+            let mut rates = Vec::new();
+            for priority in [FeePriority::Slow, FeePriority::Medium, FeePriority::Fast] {
+                rates.push(
+                    get_fee_per_gram(priority, server.uri())
+                        .await
+                        .expect("rate"),
+                );
+            }
+            rates
+        };
+        assert_eq!(rates(&[]).await, [1, 5, 10], "no stats");
+        assert_eq!(rates(&[(0, 0)]).await, [1, 1, 1], "zeros");
+        assert_eq!(rates(&[(9, 100), (6, 40), (2, 12)]).await, [2, 40, 100]);
+        assert_eq!(
+            rates(&[(5_000, 1_000_000)]).await,
+            [100, 100, 100],
+            "capped"
+        );
+        let err = get_fee_per_gram(FeePriority::Fast, "not a url".to_string())
+            .await
+            .expect_err("bad url");
+        assert_eq!(err.to_string(), "Failed to get the fee per gram");
+    });
 }
 
 /// A rate of 0 or above the cap is refused before any UTXO is reserved, by the send
