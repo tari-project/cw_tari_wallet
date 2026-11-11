@@ -77,4 +77,4 @@ The `verify/` workspace member is the end-to-end harness: hermetic **Tier A** (f
 
 ## Key dependencies
 
-`minotari-wallet-core` is a **git pin** (`tari-project/minotari-cli`, specific rev, `default-features = false, features = ["http"]`; CI fails if `Cargo.lock` gains `openssl-sys`, `native-tls`, `utoipa-swagger-ui`, `axum`, `clap`, `tonic` or `prost`); `tari_*` crates are pinned exactly (`=6.3.0-pre.1`). Bumping them is a coordinated procedure (see `CONTRIBUTING.md` → dependency & release management). Run `cargo deny check` per `deny.toml`.
+`minotari-wallet-core` is a **git pin** (`tari-project/minotari-cli`, specific rev, `default-features = false, features = ["http"]`; CI fails if `Cargo.lock` gains `openssl-sys`, `native-tls`, `utoipa-swagger-ui`, `axum`, `clap`, `tonic` or `prost`); `tari_*` crates are pinned exactly (`=6.3.0-pre.4`). Bumping them is a coordinated procedure (see `CONTRIBUTING.md` → dependency & release management). Run `cargo deny check` per `deny.toml`.
