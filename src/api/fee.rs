@@ -1,13 +1,23 @@
 use crate::api::config::{
-    DEFAULT_BASE_URL, DEFAULT_CONFIRMATION_WINDOW, DEFAULT_NUM_OUTPUTS, SEND_FEE_PER_GRAM,
+    DEFAULT_BASE_URL, DEFAULT_CONFIRMATION_WINDOW, DEFAULT_NUM_OUTPUTS, MAX_FEE_PER_GRAM,
+    SEND_FEE_PER_GRAM,
 };
-use crate::api::db::get_db_pool;
+use crate::api::db::{blocking, get_db_pool};
 use crate::api::error::WalletError;
 use crate::api::network::{parse_network, TariNetwork};
-use crate::domain::validation::validate_recipient;
-use anyhow::{Context, Result};
+use crate::domain::validation::{validate_fee_per_gram, validate_recipient};
+use anyhow::{anyhow, Context, Result};
 use flutter_rust_bridge::frb;
-use minotari_wallet::transactions::fee_estimator::{FeeEstimator, FeePriority as LibFeePriority};
+use minotari_wallet::db::{get_account_by_name, SqlitePool};
+use minotari_wallet::http::WalletHttpClient;
+use minotari_wallet::transactions::fee_estimator::{
+    estimated_output_size_for_send, FeeEstimator, FeePriority as LibFeePriority,
+};
+use minotari_wallet::transactions::fund_locker::MIN_FEE_PER_GRAM;
+use minotari_wallet::transactions::input_selector::InputSelector;
+use tari_common_types::tari_address::TariAddress;
+use tari_transaction_components::fee::Fee;
+use tari_transaction_components::weight::TransactionWeight;
 use tari_transaction_components::MicroMinotari;
 
 /// Desired confirmation speed for a transaction, trading fee against latency:
@@ -33,7 +43,12 @@ impl From<FeePriority> for LibFeePriority {
 /// A fee estimate for a prospective send.
 ///
 /// `estimated_fee` and `total_amount_required` (amount + fee) are in **microTari**;
-/// `fee_per_gram` is the rate in microTari per gram of transaction weight;
+/// `fee_per_gram` is the rate in microTari per gram of transaction weight (the node's
+/// rate, capped at the most a send accepts, Medium and Fast never below 5 and the
+/// priorities kept in order, so it can be passed to
+/// [`send_transaction_at_fee`](crate::api::send_transaction::send_transaction_at_fee),
+/// which builds at exactly that rate; the fee it pays can still differ from
+/// `estimated_fee`, which sizes a plain output without a payment id);
 /// `input_count` is how many UTXOs would be spent.
 #[frb]
 #[derive(Debug, Clone)]
@@ -49,8 +64,10 @@ pub struct FeeEstimate {
 /// `base_url` is the base node RPC endpoint and `wallet_name` selects the funding
 /// account. Requires
 /// a database path (`set_database_path` or `unlock_wallet`) first. Async;
-/// performs network I/O. Errors if estimation fails or no estimate matches the
-/// requested priority.
+/// performs network I/O. The rate is [`get_fee_per_gram`]'s for `priority` (a node that
+/// gives no fee statistics gets minotari's defaults). Errors with `Failed to estimate
+/// fees` if `base_url` is unusable, the wallet is not found, or its balance cannot cover
+/// `amount` plus the fee.
 #[frb]
 pub async fn estimate_transaction_fee(
     amount: u64,
@@ -87,37 +104,145 @@ async fn estimate_fee(
     wallet_name: String,
 ) -> Result<FeeEstimate> {
     let pool = get_db_pool()?;
+    capped_estimate(
+        pool,
+        &base_url,
+        wallet_name,
+        MicroMinotari(amount),
+        num_outputs,
+        priority,
+    )
+    .await
+    .context("Failed to estimate fees")
+}
 
-    let estimator = FeeEstimator::new(pool, base_url);
-
-    let amount_micro = MicroMinotari(amount);
-
-    let estimates = estimator
-        .estimate_fees(
-            &wallet_name,
-            amount_micro,
-            num_outputs,
-            DEFAULT_CONFIRMATION_WINDOW,
-            None, // estimated_output_size: let the estimator use its own default
-        )
+/// The fee per gram (µT) the node suggests for `priority`, at most the most a send
+/// accepts, at least minotari's minimum (Slow) or 5 (Medium and Fast), with Slow <=
+/// Medium <= Fast: the rate a
+/// [`FeeEstimate`] for that priority reports, without reading the wallet or selecting
+/// inputs. Pass it to
+/// [`estimate_send_all_fee_at`] and
+/// [`send_transaction_at_fee`](crate::api::send_transaction::send_transaction_at_fee).
+///
+/// `base_url` is the base node RPC endpoint. Async; performs network I/O. A node that
+/// gives no fee statistics gets minotari's defaults (Slow 1, Medium 5, Fast 10). Errors
+/// with `Failed to get the fee per gram` only if `base_url` is unusable.
+#[frb]
+pub async fn get_fee_per_gram(priority: FeePriority, base_url: String) -> Result<u64> {
+    let rates = node_rates(&base_url)
         .await
-        .context("Failed to estimate fees")?;
+        .context("Failed to get the fee per gram")?;
+    Ok(rate_for(priority, rates).0)
+}
 
-    let target_priority: LibFeePriority = priority.into();
+/// The node's `(fast, medium, slow)` rates as minotari's `FeeEstimator` derives them,
+/// passed through [`sane_rates`].
+async fn node_rates(base_url: &str) -> Result<(MicroMinotari, MicroMinotari, MicroMinotari)> {
+    let client = WalletHttpClient::new(base_url.parse()?)?;
+    let stats = client.get_mempool_fee_per_gram_stats(3).await.ok();
+    // Fast: the next block's average; Medium: the second block's; Slow: the deepest
+    // block's minimum. No stats: minotari's defaults.
+    let (fast, medium, slow) = match stats.as_deref() {
+        Some([first, rest @ ..]) => (
+            first.avg_fee_per_gram,
+            rest.first().unwrap_or(first).avg_fee_per_gram,
+            rest.last().unwrap_or(first).min_fee_per_gram,
+        ),
+        _ => (MicroMinotari(10), MicroMinotari(5), MicroMinotari(1)),
+    };
+    Ok(sane_rates(fast, medium, slow))
+}
 
-    let selected_estimate = estimates
-        .into_iter()
-        .find(|e| e.priority == target_priority)
-        .ok_or_else(|| {
-            WalletError::internal("Could not find fee estimate for requested priority")
-        })?;
+/// Node rates as send rates: each [`cap`]ped, Medium and Fast never below the old fixed send
+/// rate, and Slow <= Medium <= Fast, so a node quoting 0 or out of order cannot make a
+/// Fast send crawl.
+fn sane_rates(
+    fast: MicroMinotari,
+    medium: MicroMinotari,
+    slow: MicroMinotari,
+) -> (MicroMinotari, MicroMinotari, MicroMinotari) {
+    let slow = cap(slow);
+    let medium = cap(medium).max(MicroMinotari(SEND_FEE_PER_GRAM)).max(slow);
+    let fast = cap(fast).max(MicroMinotari(SEND_FEE_PER_GRAM)).max(medium);
+    (fast, medium, slow)
+}
 
-    Ok(FeeEstimate {
-        estimated_fee: selected_estimate.estimated_fee.0,
-        total_amount_required: selected_estimate.total_amount_required.0,
-        fee_per_gram: selected_estimate.fee_per_gram.0,
-        input_count: selected_estimate.input_count,
+fn rate_for(
+    priority: FeePriority,
+    (fast, medium, slow): (MicroMinotari, MicroMinotari, MicroMinotari),
+) -> MicroMinotari {
+    match priority {
+        FeePriority::Slow => slow,
+        FeePriority::Medium => medium,
+        FeePriority::Fast => fast,
+    }
+}
+
+/// minotari's `FeeEstimator::estimate_fees` for one `priority`, except that the node's
+/// rates go through [`sane_rates`] (capped at [`MAX_FEE_PER_GRAM`], Medium and Fast at
+/// least 5, Slow <= Medium <= Fast) before inputs are selected, so a wallet that can pay
+/// at the cap gets a quote. Otherwise kept step for step with upstream (pinned against it
+/// in the verify harness): for node rates already within those bounds the estimate is
+/// upstream's. The node is asked first, so no database connection is held while it
+/// answers.
+async fn capped_estimate(
+    pool: SqlitePool,
+    base_url: &str,
+    wallet_name: String,
+    amount: MicroMinotari,
+    num_outputs: usize,
+    priority: FeePriority,
+) -> Result<FeeEstimate> {
+    let rates = node_rates(base_url).await?;
+    let fast = rates.0;
+    let fee_per_gram = rate_for(priority, rates);
+
+    blocking(move || {
+        let conn = pool.get()?;
+        let account = get_account_by_name(&conn, &wallet_name)?
+            .ok_or_else(|| anyhow!("Account with name '{}' not found", wallet_name))?;
+
+        let selection = InputSelector::new(account.id, DEFAULT_CONFIRMATION_WINDOW)
+            .fetch_unspent_outputs(&conn, amount, num_outputs, fast, None)?;
+        let input_count = selection.utxos.len();
+        let total_outputs = if selection.requires_change_output {
+            num_outputs
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("Too many outputs to estimate a fee for"))?
+        } else {
+            num_outputs
+        };
+        let output_size = estimated_output_size_for_send(0, num_outputs, &TariAddress::default())?;
+        let total_output_size = output_size
+            .checked_mul(total_outputs)
+            .ok_or_else(|| anyhow!("Total output size overflows while estimating fee"))?;
+
+        let fee = Fee::new(TransactionWeight::latest()).calculate(
+            fee_per_gram,
+            1,
+            input_count,
+            total_outputs,
+            total_output_size,
+        );
+        let total_amount_required = amount
+            .checked_add(fee)
+            .ok_or_else(|| anyhow!("Amount plus fee overflows while estimating fee"))?;
+
+        Ok(FeeEstimate {
+            estimated_fee: fee.0,
+            total_amount_required: total_amount_required.0,
+            fee_per_gram: fee_per_gram.0,
+            input_count,
+        })
     })
+    .await
+}
+
+/// A node rate as a send rate: at least minotari's minimum (the node's integer averages can
+/// be 0) and at most [`MAX_FEE_PER_GRAM`].
+fn cap(rate: MicroMinotari) -> MicroMinotari {
+    rate.max(MIN_FEE_PER_GRAM)
+        .min(MicroMinotari(MAX_FEE_PER_GRAM))
 }
 
 /// What a send-all would cost and pay, from [`estimate_send_all_fee`].
@@ -141,7 +266,7 @@ pub struct SendAllFeeEstimate {
 /// Computed by minotari exactly as the send-all in
 /// [`send_transaction`](crate::api::send_transaction::send_transaction)
 /// computes it, at the same fee per gram, so `amount_after_fee` is what that send
-/// pays. `payment_id` changes the output size and so the fee; pass the one the send
+/// pays. To send at another rate, quote with [`estimate_send_all_fee_at`]. `payment_id` changes the output size and so the fee; pass the one the send
 /// will use, and the same `confirmation_window` (`None` → 3, as for the send).
 /// Offline: reads only the wallet database. `network` as elsewhere (`None` → MainNet). Errors if the address is invalid or the wallet's spendable
 /// balance would leave the recipient only dust. Requires
@@ -154,6 +279,30 @@ pub fn estimate_send_all_fee(
     network: Option<TariNetwork>,
     confirmation_window: Option<u64>,
 ) -> Result<SendAllFeeEstimate> {
+    estimate_send_all_fee_at(
+        wallet_name,
+        recipient_address,
+        payment_id,
+        network,
+        confirmation_window,
+        SEND_FEE_PER_GRAM,
+    )
+}
+
+/// [`estimate_send_all_fee`] at `fee_per_gram` (µT per gram), quoting the send-all of
+/// [`send_transaction_at_fee`](crate::api::send_transaction::send_transaction_at_fee)
+/// at the same rate. Errors with `Invalid fee per gram: …` for a rate of 0 or above the
+/// cap, before the wallet is read.
+#[frb]
+pub fn estimate_send_all_fee_at(
+    wallet_name: String,
+    recipient_address: String,
+    payment_id: Option<String>,
+    network: Option<TariNetwork>,
+    confirmation_window: Option<u64>,
+    fee_per_gram: u64,
+) -> Result<SendAllFeeEstimate> {
+    validate_fee_per_gram(fee_per_gram, MAX_FEE_PER_GRAM)?;
     let network = parse_network(network);
     let address = validate_recipient(network, &recipient_address, 0, true)?;
 
@@ -165,7 +314,7 @@ pub fn estimate_send_all_fee(
             network,
             &address,
             payment_id.as_deref(),
-            MicroMinotari(SEND_FEE_PER_GRAM),
+            MicroMinotari(fee_per_gram),
             confirmation_window.unwrap_or(DEFAULT_CONFIRMATION_WINDOW),
         )
         .map_err(|e| WalletError::wallet(e.to_string()))?;
@@ -200,6 +349,41 @@ mod tests {
         assert_eq!(
             LibFeePriority::from(FeePriority::Fast),
             LibFeePriority::Fast
+        );
+    }
+
+    #[test]
+    fn node_rates_are_floored_and_kept_in_order() {
+        let m = MicroMinotari;
+        // All-zero stats.
+        assert_eq!(sane_rates(m(0), m(0), m(0)), (m(5), m(5), m(1)));
+        // Inverted: Slow above Fast.
+        assert_eq!(sane_rates(m(2), m(3), m(50)), (m(50), m(50), m(50)));
+        // minotari's no-stats defaults, and ordered rates in range, are unchanged.
+        assert_eq!(sane_rates(m(10), m(5), m(1)), (m(10), m(5), m(1)));
+        assert_eq!(sane_rates(m(100), m(40), m(2)), (m(100), m(40), m(2)));
+        // Above the cap.
+        assert_eq!(
+            sane_rates(m(u64::MAX), m(500), m(200)),
+            (m(100), m(100), m(100))
+        );
+    }
+
+    #[test]
+    fn node_rates_are_held_between_the_minimum_and_the_cap() {
+        assert_eq!(cap(MicroMinotari(0)), MIN_FEE_PER_GRAM);
+        assert_eq!(cap(MicroMinotari(5)), MicroMinotari(5));
+        assert_eq!(
+            cap(MicroMinotari(MAX_FEE_PER_GRAM)),
+            MicroMinotari(MAX_FEE_PER_GRAM)
+        );
+        assert_eq!(
+            cap(MicroMinotari(MAX_FEE_PER_GRAM + 1)),
+            MicroMinotari(MAX_FEE_PER_GRAM)
+        );
+        assert_eq!(
+            cap(MicroMinotari(u64::MAX)),
+            MicroMinotari(MAX_FEE_PER_GRAM)
         );
     }
 }

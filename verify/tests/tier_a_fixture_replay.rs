@@ -24,7 +24,8 @@ use minotari_wallet_ffi::api::address::get_address;
 use minotari_wallet_ffi::api::balance::get_balance;
 use minotari_wallet_ffi::api::db::{lock_wallet, set_database_path, unlock_wallet};
 use minotari_wallet_ffi::api::fee::{
-    estimate_send_all_fee, estimate_transaction_fee_for_outputs, FeePriority,
+    estimate_send_all_fee, estimate_send_all_fee_at, estimate_transaction_fee_for_outputs,
+    get_fee_per_gram, FeePriority,
 };
 use minotari_wallet_ffi::api::network::current_network;
 use minotari_wallet_ffi::api::network::TariNetwork;
@@ -33,8 +34,8 @@ use minotari_wallet_ffi::api::scanner::{
     ScanEventDto, ScanPriority,
 };
 use minotari_wallet_ffi::api::send_transaction::{
-    abandon_send, send_transaction_with_handler, MultiSendTransactionDetails, SendRecipient,
-    TransactionStage,
+    abandon_send, send_transaction_at_fee_with_handler, send_transaction_with_handler,
+    MultiSendTransactionDetails, SendRecipient, TransactionStage,
 };
 use minotari_wallet_ffi::api::signing::{sign_message, verify_message};
 use minotari_wallet_ffi::api::transactions::get_transactions;
@@ -716,6 +717,129 @@ fn fee_for_more_outputs_is_higher() {
     assert_eq!(three.total_amount_required, 1_000_000 + three.estimated_fee);
 }
 
+/// A mock node answering fee-per-gram `stats` (`(min, avg)` per block; empty: no stats).
+async fn node_with_fee_stats(stats: &[(u64, u64)]) -> wiremock::MockServer {
+    let server = wiremock::MockServer::start().await;
+    if !stats.is_empty() {
+        let stats: Vec<_> = stats
+            .iter()
+            .enumerate()
+            .map(|(order, (min, avg))| {
+                serde_json::json!({
+                    "order": order, "min_fee_per_gram": min, "avg_fee_per_gram": avg,
+                    "max_fee_per_gram": avg,
+                })
+            })
+            .collect();
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/get_mempool_fee_per_gram_stats"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "stats": stats })),
+            )
+            .mount(&server)
+            .await;
+    }
+    server
+}
+
+/// A node rate above the cap is capped before inputs are selected: a wallet that can pay
+/// at the cap, but not at the node's rate, is quoted exactly as at a node saying the cap.
+#[test]
+fn node_fee_rates_are_capped_before_inputs_are_selected() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _funded = with_funded_wallet();
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let estimate_with_node_rate = |rate: u64| {
+        runtime.block_on(async {
+            let server = node_with_fee_stats(&[(rate, rate)]).await;
+            estimate_transaction_fee_for_outputs(
+                5_000_000,
+                1,
+                FeePriority::Fast,
+                server.uri(),
+                FUNDED.to_string(),
+            )
+            .await
+        })
+    };
+    let at_cap = estimate_with_node_rate(100).expect("affordable at the cap");
+    assert_eq!(at_cap.fee_per_gram, 100);
+    assert_eq!(
+        at_cap.input_count, 3,
+        "5 T of 1, 2 and 3 T needs every output"
+    );
+    // 1 T a gram: the 6 T wallet could never pay this.
+    let over = estimate_with_node_rate(1_000_000).expect("quoted at the cap");
+    assert_eq!(over.fee_per_gram, 100);
+    assert_eq!(over.input_count, at_cap.input_count);
+    assert_eq!(over.estimated_fee, at_cap.estimated_fee);
+    assert_eq!(over.total_amount_required, 5_000_000 + at_cap.estimated_fee);
+}
+
+/// Upstream-drift tripwire: when the node's rates are in order and Medium and Fast are
+/// within 5..=100, the bridge's estimate is exactly minotari's
+/// `FeeEstimator::estimate_fees` for that priority.
+#[test]
+fn fee_estimates_below_the_cap_match_minotari() {
+    use minotari_wallet::transactions::fee_estimator::{
+        FeeEstimator, FeePriority as LibFeePriority,
+    };
+
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let pool = minotari_wallet::db::init_db(funded.db.db_path.clone()).expect("pool");
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    runtime.block_on(async {
+        // No stats (minotari's defaults), a zero Slow (its minimum), one block, three blocks.
+        for stats in [
+            vec![],
+            vec![(0, 5), (0, 5)],
+            vec![(4, 30)],
+            vec![(9, 100), (6, 40), (2, 12)],
+        ] {
+            let server = node_with_fee_stats(&stats).await;
+            for (amount, outputs) in [(1_000, 1), (2_500_000, 2), (5_000_000, 1)] {
+                let upstream = FeeEstimator::new(pool.clone(), server.uri())
+                    .estimate_fees(
+                        FUNDED,
+                        tari_transaction_components::MicroMinotari(amount),
+                        outputs,
+                        3,
+                        None,
+                    )
+                    .await
+                    .expect("upstream estimate");
+                for priority in [FeePriority::Slow, FeePriority::Medium, FeePriority::Fast] {
+                    let ours = estimate_transaction_fee_for_outputs(
+                        amount,
+                        outputs as u32,
+                        priority,
+                        server.uri(),
+                        FUNDED.to_string(),
+                    )
+                    .await
+                    .expect("estimate");
+                    let theirs = upstream
+                        .iter()
+                        .find(|e| e.priority == LibFeePriority::from(priority))
+                        .expect("every priority");
+                    let case = format!("{stats:?} {amount} x{outputs} {priority:?}");
+                    assert_eq!(ours.fee_per_gram, theirs.fee_per_gram.0, "{case}");
+                    assert_eq!(ours.estimated_fee, theirs.estimated_fee.0, "{case}");
+                    assert_eq!(
+                        ours.total_amount_required, theirs.total_amount_required.0,
+                        "{case}"
+                    );
+                    assert_eq!(ours.input_count, theirs.input_count, "{case}");
+                }
+            }
+        }
+    });
+}
+
 #[test]
 fn send_transaction_pays_every_recipient() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
@@ -807,6 +931,183 @@ fn send_all_sweeps_the_quoted_amount() {
     );
     let balance = get_balance(FUNDED.to_string()).expect("balance");
     assert_eq!(balance.available, 0, "every output is spent");
+}
+
+/// A send-all at a chosen rate pays exactly its quote at that rate, which scales with
+/// the rate (same inputs and outputs, so the same weight).
+#[test]
+fn send_all_at_a_rate_sweeps_the_quoted_amount() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let quote = |fee_per_gram| {
+        estimate_send_all_fee_at(
+            FUNDED.to_string(),
+            funded.recipient.clone(),
+            None,
+            Some(TariNetwork::Esmeralda),
+            None,
+            fee_per_gram,
+        )
+        .expect("estimate_send_all_fee_at")
+    };
+    let default = estimate_send_all_fee(
+        FUNDED.to_string(),
+        funded.recipient.clone(),
+        None,
+        Some(TariNetwork::Esmeralda),
+        None,
+    )
+    .expect("estimate_send_all_fee");
+    assert_eq!(quote(5).fee, default.fee, "the default rate is 5");
+    let estimate = quote(20);
+    assert_eq!(estimate.fee, 4 * default.fee);
+    assert_eq!(estimate.input_count, 3);
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let (sent, kernel_fee) = runtime.block_on(async {
+        let server = wiremock::MockServer::start().await;
+        let details = funded_send(
+            &funded,
+            vec![SendRecipient {
+                address: funded.recipient.clone(),
+                amount: 0,
+                payment_id: None,
+            }],
+            true,
+            server.uri(),
+        );
+        let sent = send_transaction_at_fee_with_handler(details, 20, |_| {}).await;
+        (sent, broadcast_kernel_fee(&server).await)
+    });
+    let sent = sent.expect("send-all at 20").transaction;
+
+    assert_eq!(kernel_fee, estimate.fee, "built at 20");
+    assert_eq!(sent.amount, estimate.amount_after_fee + estimate.fee);
+    let balance = get_balance(FUNDED.to_string()).expect("balance");
+    assert_eq!(balance.available, 0, "every output is spent");
+}
+
+/// The fee in the kernel of the transaction broadcast to the mock node.
+async fn broadcast_kernel_fee(server: &wiremock::MockServer) -> u64 {
+    let requests = server.received_requests().await.expect("recorded requests");
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests.first().expect("a broadcast").body).expect("json");
+    body["params"]["transaction"]["body"]["kernels"][0]["fee"]
+        .as_u64()
+        .expect("kernel fee")
+}
+
+/// A normal send is built at the rate it is given: the same send from the same wallet
+/// state pays 4x the fee at 20 µT/gram as at 5.
+#[test]
+fn a_normal_send_is_built_at_the_given_rate() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let kernel_fee_at = |rate: u64| {
+        let funded = with_funded_wallet();
+        runtime.block_on(async {
+            let server = wiremock::MockServer::start().await;
+            let details = funded_send(
+                &funded,
+                vec![SendRecipient {
+                    address: funded.recipient.clone(),
+                    amount: 100_000,
+                    payment_id: None,
+                }],
+                false,
+                server.uri(),
+            );
+            send_transaction_at_fee_with_handler(details, rate, |_| {})
+                .await
+                .expect("send");
+            broadcast_kernel_fee(&server).await
+        })
+    };
+    let at_default = kernel_fee_at(5);
+    let at_twenty = kernel_fee_at(20);
+    assert!(at_default > 0);
+    assert_eq!(at_twenty, 4 * at_default);
+}
+
+/// The rate alone is the estimate's rate: capped, Slow floored at minotari's minimum and
+/// Medium and Fast at 5, kept in order, and minotari's defaults when the node has no
+/// statistics.
+#[test]
+fn the_fee_per_gram_is_the_capped_node_rate() {
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    runtime.block_on(async {
+        let rates = |stats: &'static [(u64, u64)]| async move {
+            let server = node_with_fee_stats(stats).await;
+            let mut rates = Vec::new();
+            for priority in [FeePriority::Slow, FeePriority::Medium, FeePriority::Fast] {
+                rates.push(
+                    get_fee_per_gram(priority, server.uri())
+                        .await
+                        .expect("rate"),
+                );
+            }
+            rates
+        };
+        assert_eq!(rates(&[]).await, [1, 5, 10], "no stats");
+        assert_eq!(rates(&[(0, 0)]).await, [1, 5, 5], "zeros");
+        assert_eq!(rates(&[(2, 2), (50, 50)]).await, [50, 50, 50], "inverted");
+        assert_eq!(rates(&[(9, 100), (6, 40), (2, 12)]).await, [2, 40, 100]);
+        assert_eq!(
+            rates(&[(5_000, 1_000_000)]).await,
+            [100, 100, 100],
+            "capped"
+        );
+        let err = get_fee_per_gram(FeePriority::Fast, "not a url".to_string())
+            .await
+            .expect_err("bad url");
+        assert_eq!(err.to_string(), "Failed to get the fee per gram");
+    });
+}
+
+/// A rate of 0 or above the cap is refused before any UTXO is reserved, by the send
+/// and by the send-all quote.
+#[test]
+fn an_out_of_range_rate_is_refused_without_locking_anything() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    for (rate, message) in [
+        (
+            0,
+            "Invalid fee per gram: 0 (must be 1 to 100 microTari per gram)",
+        ),
+        (
+            101,
+            "Invalid fee per gram: 101 (must be 1 to 100 microTari per gram)",
+        ),
+    ] {
+        let details = funded_send(
+            &funded,
+            vec![SendRecipient {
+                address: funded.recipient.clone(),
+                amount: 1_000,
+                payment_id: None,
+            }],
+            false,
+            "http://127.0.0.1:1".to_string(),
+        );
+        let err = runtime
+            .block_on(send_transaction_at_fee_with_handler(details, rate, |_| {}))
+            .expect_err("refused rate");
+        assert_eq!(err.to_string(), message);
+        let err = estimate_send_all_fee_at(
+            FUNDED.to_string(),
+            funded.recipient.clone(),
+            None,
+            Some(TariNetwork::Esmeralda),
+            None,
+            rate,
+        )
+        .expect_err("refused rate");
+        assert_eq!(err.to_string(), message);
+    }
+    let balance = get_balance(FUNDED.to_string()).expect("balance");
+    assert_eq!(balance.locked, 0, "nothing reserved");
 }
 
 /// A key-imported wallet has no seed words: once unlocked it sends with its stored

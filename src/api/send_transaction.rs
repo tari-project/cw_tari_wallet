@@ -1,5 +1,6 @@
 use crate::api::config::{
-    DEFAULT_BASE_URL, DEFAULT_CONFIRMATION_WINDOW, SECONDS_TO_LOCK_UTXO, SEND_FEE_PER_GRAM,
+    DEFAULT_BASE_URL, DEFAULT_CONFIRMATION_WINDOW, MAX_FEE_PER_GRAM, SECONDS_TO_LOCK_UTXO,
+    SEND_FEE_PER_GRAM,
 };
 use crate::api::db::{
     blocking, get_db_connection, get_db_pool, is_unlocked, release_expired_reservations,
@@ -10,7 +11,9 @@ use crate::api::network::{apply_network, parse_network, TariNetwork};
 use crate::api::scanner::{begin_maintenance, stop_wallet_scans};
 use crate::api::transactions::DisplayedTransactionDto;
 use crate::domain::text::strip_format_chars;
-use crate::domain::validation::{validate_recipient, validate_recipient_count};
+use crate::domain::validation::{
+    validate_fee_per_gram, validate_recipient, validate_recipient_count,
+};
 use crate::frb_generated::StreamSink;
 use anyhow::Result;
 use flutter_rust_bridge::frb;
@@ -222,7 +225,20 @@ pub async fn abandon_send(
 /// rebroadcast, so it must not be sent again.
 #[frb(ignore)]
 pub async fn send_transaction_with_handler<F>(
+    details: MultiSendTransactionDetails,
+    status_callback: F,
+) -> Result<SendResultDto>
+where
+    F: Fn(SendTransactionEvent) + Send + Sync + 'static,
+{
+    send_transaction_at_fee_with_handler(details, SEND_FEE_PER_GRAM, status_callback).await
+}
+
+/// [`send_transaction_with_handler`] built at `fee_per_gram` (µT per gram).
+#[frb(ignore)]
+pub async fn send_transaction_at_fee_with_handler<F>(
     mut details: MultiSendTransactionDetails,
+    fee_per_gram: u64,
     status_callback: F,
 ) -> Result<SendResultDto>
 where
@@ -238,6 +254,7 @@ where
     report(TransactionStage::Initializing, "Starting workflow...");
 
     report(TransactionStage::ValidatingInput, "Parsing inputs...");
+    validate_fee_per_gram(fee_per_gram, MAX_FEE_PER_GRAM)?;
     let validated = validate_inputs(&details)?;
 
     apply_network(validated.network)?;
@@ -250,6 +267,7 @@ where
         &details.wallet_name,
         validated.network,
         validated.confirmations,
+        fee_per_gram,
     )?;
 
     // Load the signing keys from the session *before* the transaction reserves any
@@ -455,6 +473,28 @@ pub async fn send_transaction(
     .await
 }
 
+/// [`send_transaction`] built at `fee_per_gram` (µT per gram) instead of the default
+/// rate: pass the `fee_per_gram` of the
+/// [`FeeEstimate`](crate::api::fee::FeeEstimate) the user confirmed, or for a send-all
+/// the rate given to
+/// [`estimate_send_all_fee_at`](crate::api::fee::estimate_send_all_fee_at). The send is
+/// built at exactly that rate. Only a send-all's fee is exactly its quote; a normal
+/// send's fee can differ from the estimate's `estimated_fee`. A rate of 0 or above the cap errors with
+/// `Invalid fee per gram: …` before any UTXO is reserved. Otherwise as
+/// [`send_transaction`], including that a closed sink does not abort the send.
+#[frb]
+pub async fn send_transaction_at_fee(
+    sink: StreamSink<SendTransactionEvent>,
+    details: MultiSendTransactionDetails,
+    fee_per_gram: u64,
+) -> Result<SendResultDto> {
+    send_transaction_at_fee_with_handler(details, fee_per_gram, move |event| {
+        // As `send_transaction`: never abort a half-broadcast send.
+        let _ = sink.add(event);
+    })
+    .await
+}
+
 /// Thin adapter: resolve the network (frozen `None → MainNet` default), validate each
 /// recipient with the pure domain validator and apply the confirmation-window default.
 /// `WalletError` is converted to the boundary `anyhow::Error` via `?`.
@@ -486,6 +526,7 @@ fn create_transaction_sender(
     wallet_name: &str,
     network: Network,
     confirmations: u64,
+    fee_per_gram: u64,
 ) -> Result<TransactionSender> {
     let db_pool = get_db_pool().map_err(|e| WalletError::database(e.to_string()))?;
 
@@ -497,7 +538,7 @@ fn create_transaction_sender(
         confirmations,
     )
     .map_err(|e| WalletError::wallet(e.to_string()))?;
-    sender.fee_per_gram = MicroMinotari(SEND_FEE_PER_GRAM);
+    sender.fee_per_gram = MicroMinotari(fee_per_gram);
     Ok(sender)
 }
 
@@ -775,7 +816,8 @@ mod tests {
 
         unlock_wallet(path, "test".into(), "pass".into()).unwrap();
         stored_key_manager("test").expect("the session signs");
-        let mut sender = create_transaction_sender("test", Network::LocalNet, 3).unwrap();
+        let mut sender =
+            create_transaction_sender("test", Network::LocalNet, 3, SEND_FEE_PER_GRAM).unwrap();
         let conn = get_db_connection().unwrap();
         let address = unlocked_account(&conn, "test")
             .unwrap()
@@ -974,7 +1016,8 @@ mod tests {
             set_database_path(path.clone()).unwrap();
             unlock_wallet(path, "test".into(), passphrase.into()).unwrap();
             stored_key_manager("test").expect("unlocked: the keys load");
-            let mut sender = create_transaction_sender("test", Network::LocalNet, 3).unwrap();
+            let mut sender =
+                create_transaction_sender("test", Network::LocalNet, 3, SEND_FEE_PER_GRAM).unwrap();
             let address = minotari_wallet::db::get_account_by_name(&pool.get().unwrap(), "test")
                 .unwrap()
                 .unwrap()
