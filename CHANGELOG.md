@@ -43,6 +43,16 @@ diff) before the version is tagged.
   `minotari_wallet_ffi.dll`, `minotari_wallet_ffi.xcframework`), so the library
   names the coin it serves. The Dart API is unchanged; only the library the
   generated loader opens (`stem`) differs, so consumers update their packaging.
+- Bumped `minotari-wallet-core` to minotari-cli `80e8ac9` (the merge of tari-project/minotari-cli#179)
+  and the `tari_*` crates to `=6.3.0-pre.4` (`tari_sidechain` 9.0). No change to
+  the bridge.
+
+### Security
+
+- Bundled SQLite is now 3.54.1: `rusqlite` 0.41 / `libsqlite3-sys` 0.39.1 (via
+  minotari-cli), with `r2d2_sqlite` 0.36 and (verify) `rusqlite` 0.41 to match.
+  Fixes [RUSTSEC-2026-0459](https://rustsec.org/advisories/RUSTSEC-2026-0459)
+  (CVE-2026-119375), which failed the `v0.2.0` release's `cargo deny` gate.
 
 ## [0.2.0] — not tagged yet (SPEC-12 tags `v0.2.0`)
 
