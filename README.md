@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/minotari.svg" alt="Minotari" width="128" height="128">
+</p>
+
 # cw_tari_wallet
 
 A [flutter_rust_bridge](https://github.com/fzyzcjy/flutter_rust_bridge) (FRB)
