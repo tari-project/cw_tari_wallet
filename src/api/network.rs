@@ -25,7 +25,7 @@ impl FromStr for TariNetwork {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
+        match s.trim().to_lowercase().as_str() {
             "mainnet" => Ok(TariNetwork::MainNet),
             "stagenet" => Ok(TariNetwork::StageNet),
             "nextnet" => Ok(TariNetwork::NextNet),
