@@ -9,7 +9,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 import 'transactions.dart';
 part 'scanner.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `abandon_hint`, `begin_maintenance`, `build_scanner`, `cancel_wallet_scans`, `capped_threads`, `check_rescan_height`, `claim_and_scan`, `clear_scan_if_current`, `is_terminal`, `maintenance_lock`, `map_processing_event`, `rollback_account`, `run_forwarder`, `run_scan`, `scan_failure`, `scan_in_slot`, `scan`, `stop_wallet_scans`, `stopped_event`, `take_slot`, `with_abandon_hint`, `write_state`
+// These functions are ignored because they are not marked as `pub`: `abandon_hint`, `begin_maintenance`, `build_scanner`, `cancel_wallet_scans`, `capped_threads`, `check_rescan_height`, `claim_and_scan`, `clear_scan_if_current`, `is_terminal`, `maintenance_lock`, `map_history_event`, `map_processing_event`, `rollback_account`, `run_forwarder`, `run_scan`, `scan_failure`, `scan_in_slot`, `scan`, `stop_wallet_scans`, `stopped_event`, `take_slot`, `with_abandon_hint`, `write_state`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ScanController`, `ScanState`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `rescan_with_handler`, `start_scan_with_handler`

@@ -4,14 +4,15 @@
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
 import '../frb_generated.dart';
+import 'fee.dart';
 import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'transactions.dart';
 
-// These functions are ignored because they are not marked as `pub`: `abandon_warnings`, `build_unsigned_transaction`, `build_while_unlocked`, `confirm_own_payload`, `create_transaction_sender`, `ensure_conflicts`, `map_signing_error`, `output_hash`, `parse_transaction_id`, `release_send_reservation`, `resolve_conflict`, `same_account`, `stored_key_manager`, `unlocked_in`, `validate_inputs`
+// These functions are ignored because they are not marked as `pub`: `abandon_warnings`, `build_unsigned_transaction`, `build_while_unlocked`, `confirm_own_payload`, `create_transaction_sender`, `ensure_conflicts`, `map_signing_error`, `output_hash`, `parse_transaction_id`, `release_send_reservation`, `resolve_conflict`, `same_account`, `send_at_fee_inner`, `stored_key_manager`, `unlocked_in`, `validate_inputs`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `Conflict`, `ValidatedInputs`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`
-// These functions are ignored (category: IgnoreBecauseExplicitAttribute): `send_transaction_at_fee_with_handler`, `send_transaction_with_handler`
+// These functions are ignored (category: IgnoreBecauseExplicitAttribute): `send_transaction_at_fee_limit_with_handler`, `send_transaction_at_fee_with_handler`, `send_transaction_with_handler`
 
 /// Give up a stalled send and release its inputs.
 ///
@@ -115,6 +116,25 @@ Stream<SendTransactionEvent> sendTransactionAtFee(
         required BigInt feePerGram}) =>
     RustLib.instance.api.crateApiSendTransactionSendTransactionAtFee(
         details: details, feePerGram: feePerGram);
+
+/// Send at the selected rate, refusing to broadcast if the actual signed kernel fee
+/// exceeds the total fee confirmed in Cake. Releases reservations on refusal.
+/// A closed sink continues an already-broadcast send, exactly as the older APIs do.
+Stream<SendTransactionEvent> sendTransactionAtFeeLimit(
+        {required MultiSendTransactionDetails details,
+        required BigInt feePerGram,
+        required BigInt maxFee}) =>
+    RustLib.instance.api.crateApiSendTransactionSendTransactionAtFeeLimit(
+        details: details, feePerGram: feePerGram, maxFee: maxFee);
+
+/// Quote a concrete ordinary send using its recipients, memos and selected rate.
+/// No inputs are reserved and nothing is broadcast. The absolute fee is conservative;
+/// `send_transaction_at_fee_limit` checks the signed fee again before broadcast.
+Future<FeeEstimate> estimateSendFee(
+        {required MultiSendTransactionDetails details,
+        required FeePriority priority}) =>
+    RustLib.instance.api.crateApiSendTransactionEstimateSendFee(
+        details: details, priority: priority);
 
 /// A send the user abandoned ([`abandon_send`]) that a node accepted or that was
 /// mined after all, from [`get_abandon_warnings`].

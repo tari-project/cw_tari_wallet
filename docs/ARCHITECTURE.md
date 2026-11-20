@@ -389,3 +389,20 @@ wrapping covers *every* bridge entry point. That is a separate change with its o
 test pass, not a one-line manifest edit — so it is recorded here rather than
 bundled into a dependency bump.
 </content>
+
+
+## History amounts and fee confirmation
+
+`domain::history` separates display amounts from the unchanged minotari ledger.
+`api::transactions::history_dto` is shared by page reads and raw scan-event
+snapshots. It reads saved signed kernels for local sends. Restored sends need a
+matching owned change output, a consistent memo and matching input/output totals;
+without that evidence the known net debit remains and `fee` is absent.
+The immediate send result uses the signed kernel directly, avoiding a fallible
+post-broadcast database read. Incoming PayRefs use received mined outputs;
+outgoing references use recipient hashes and the actual mined block.
+
+`estimate_send_fee` selects inputs at the chosen rate and sizes recipient memos.
+`send_transaction_at_fee_limit` checks the signed kernel total before finalization
+and broadcast. Fee growth releases reservations and requires another quote.
+Existing unbounded send APIs remain available for other consumers.

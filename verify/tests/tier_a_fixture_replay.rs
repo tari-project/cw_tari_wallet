@@ -34,7 +34,8 @@ use minotari_wallet_ffi::api::scanner::{
     ScanEventDto, ScanPriority,
 };
 use minotari_wallet_ffi::api::send_transaction::{
-    abandon_send, get_abandon_warnings, send_transaction_at_fee_with_handler,
+    abandon_send, estimate_send_fee, get_abandon_warnings,
+    send_transaction_at_fee_limit_with_handler, send_transaction_at_fee_with_handler,
     send_transaction_with_handler, AbandonWarningKind, MultiSendTransactionDetails, SendRecipient,
     SendResultDto, SendTransactionEvent, TransactionStage,
 };
@@ -930,11 +931,10 @@ fn send_all_sweeps_the_quoted_amount() {
         .expect("send-all")
         .transaction;
 
-    // The history shows what left the wallet: the quoted payment plus the quoted fee.
+    // The recipient amount and signed kernel fee are separate in the history.
     assert_eq!(
-        sent.amount,
-        estimate.amount_after_fee + estimate.fee,
-        "pays and charges what was quoted"
+        sent.amount, estimate.amount_after_fee,
+        "pays what was quoted"
     );
     let balance = get_balance(FUNDED.to_string()).expect("balance");
     assert_eq!(balance.available, 0, "every output is spent");
@@ -989,7 +989,8 @@ fn send_all_at_a_rate_sweeps_the_quoted_amount() {
     let sent = sent.expect("send-all at 20").transaction;
 
     assert_eq!(kernel_fee, estimate.fee, "built at 20");
-    assert_eq!(sent.amount, estimate.amount_after_fee + estimate.fee);
+    assert_eq!(sent.amount, estimate.amount_after_fee);
+    assert_eq!(sent.fee.as_ref().expect("verified fee").amount, kernel_fee);
     let balance = get_balance(FUNDED.to_string()).expect("balance");
     assert_eq!(balance.available, 0, "every output is spent");
 }
@@ -1750,6 +1751,60 @@ fn a_conflicting_resend_spends_the_abandoned_sends_released_input() {
     assert_eq!(result.transaction.id, resent.transaction.id);
 }
 
+#[test]
+fn a_resend_quote_includes_all_required_released_inputs() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet_holding(&[2 * T, 2 * T]);
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let (original_id, original) = abandoned_send(&funded, &runtime, 3 * T);
+    assert_eq!(input_hashes(&original).len(), 2);
+    fixture::add_spendable_outputs(&funded.db.db_path, FUNDED, FUNDED_PASSPHRASE, &[50 * T])
+        .expect("receive 50 T");
+
+    runtime.block_on(async {
+        let node = wiremock::MockServer::start().await;
+        let details = |url, conflicts_with_transaction_id| {
+            let mut details = funded_send(
+                &funded,
+                vec![SendRecipient {
+                    address: funded.recipient.clone(),
+                    amount: 3 * T,
+                    payment_id: None,
+                }],
+                false,
+                url,
+            );
+            details.conflicts_with_transaction_id = conflicts_with_transaction_id;
+            details
+        };
+        let before = spendable_outputs(&funded);
+        let plain = estimate_send_fee(details(node.uri(), None), FeePriority::Medium)
+            .await
+            .expect("quote a plain payment");
+        let quote = estimate_send_fee(
+            details(node.uri(), Some(original_id.clone())),
+            FeePriority::Medium,
+        )
+        .await
+        .expect("quote a resend");
+        assert_eq!(plain.input_count, 1);
+        assert_eq!(quote.input_count, 2);
+        assert!(quote.estimated_fee > plain.estimated_fee);
+        assert_eq!(spendable_outputs(&funded), before);
+
+        let broadcast = wiremock::MockServer::start().await;
+        send_transaction_at_fee_limit_with_handler(
+            details(broadcast.uri(), Some(original_id)),
+            quote.fee_per_gram,
+            quote.estimated_fee,
+            |_| {},
+        )
+        .await
+        .expect("resend fits the confirmed quote");
+        assert!(broadcast_kernel_fee(&broadcast).await <= quote.estimated_fee);
+    });
+}
+
 /// Control for the test above, documenting the double-pay hazard: the same resend
 /// **without** `conflicts_with_transaction_id` spends the 50 and shares no input with
 /// the original, so both can be mined.
@@ -2290,5 +2345,119 @@ impl From<&DisplayedTransactionDto> for TransactionSnapshot {
             }),
             payrefs: t.payrefs.clone(),
         }
+    }
+}
+
+/// A changed input selection must never spend a fee above the confirmation amount.
+/// Failure happens before broadcast, releases reservations, and allows a later send.
+#[test]
+fn confirmed_fee_ceiling_rejects_before_broadcast_and_releases_inputs() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let funded = with_funded_wallet();
+    let before = spendable_outputs(&funded);
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    runtime.block_on(async {
+        let server = wiremock::MockServer::start().await;
+        let details = || {
+            funded_send(
+                &funded,
+                vec![SendRecipient {
+                    address: funded.recipient.clone(),
+                    amount: 100_000,
+                    payment_id: None,
+                }],
+                false,
+                server.uri(),
+            )
+        };
+        let error = send_transaction_at_fee_limit_with_handler(details(), 5, 1, |_| {})
+            .await
+            .expect_err("signed fee exceeds the confirmed ceiling");
+        assert!(error.to_string().contains("confirmed maximum"), "{error}");
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "must not broadcast"
+        );
+        assert_eq!(
+            spendable_outputs(&funded),
+            before,
+            "release reserved inputs"
+        );
+
+        let result = send_transaction_at_fee_limit_with_handler(details(), 5, 100_000, |_| {})
+            .await
+            .expect("retry with sufficient confirmed ceiling")
+            .transaction;
+        let kernel_fee = broadcast_kernel_fee(&server).await;
+        assert_eq!(result.amount, 100_000, "recipient amount excludes fee");
+        assert_eq!(result.fee.as_ref().expect("signed fee").amount, kernel_fee);
+        let history = get_transactions(FUNDED.to_string(), 100, 0).unwrap();
+        let saved = history
+            .iter()
+            .find(|tx| tx.id == result.id)
+            .expect("saved send");
+        assert_eq!(
+            saved.amount, result.amount,
+            "paginated history agrees with send result"
+        );
+        assert_eq!(saved.fee.as_ref().unwrap().amount, kernel_fee);
+    });
+}
+
+/// Quote the actual memo and recipient list at the selected rate, without locking funds.
+/// All sends stay on a local mock node; real signed kernels prove the upper bound.
+#[test]
+fn concrete_quotes_cover_memos_multiple_recipients_and_selected_priorities() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    for (count, memo, priority) in [
+        (1, None, FeePriority::Slow),
+        (1, Some("invoice-".repeat(10)), FeePriority::Medium),
+        (2, Some("invoice-".repeat(5)), FeePriority::Fast),
+    ] {
+        let funded = with_funded_wallet();
+        runtime.block_on(async {
+            let server = wiremock::MockServer::start().await;
+            let details = || {
+                funded_send(
+                    &funded,
+                    (0..count)
+                        .map(|_| SendRecipient {
+                            address: funded.recipient.clone(),
+                            amount: 100_000,
+                            payment_id: memo.clone(),
+                        })
+                        .collect(),
+                    false,
+                    server.uri(),
+                )
+            };
+            let before = spendable_outputs(&funded);
+            let quote = estimate_send_fee(details(), priority)
+                .await
+                .expect("quote concrete send");
+            assert_eq!(
+                spendable_outputs(&funded),
+                before,
+                "quoting must not reserve funds"
+            );
+            // Clear the rate request from the mock log by using another node for broadcast.
+            let broadcast = wiremock::MockServer::start().await;
+            let mut send = details();
+            send.base_url = Some(broadcast.uri());
+            let result = send_transaction_at_fee_limit_with_handler(
+                send,
+                quote.fee_per_gram,
+                quote.estimated_fee,
+                |_| {},
+            )
+            .await
+            .expect("send within concrete quote")
+            .transaction;
+            let signed_fee = broadcast_kernel_fee(&broadcast).await;
+            assert!(signed_fee <= quote.estimated_fee);
+            assert_eq!(result.amount, count as u64 * 100_000);
+            assert_eq!(result.fee.unwrap().amount, signed_fee);
+        });
     }
 }

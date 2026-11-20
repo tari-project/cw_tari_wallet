@@ -36,6 +36,25 @@ diff) before the version is tagged.
 
 ## [Unreleased]
 
+### Added
+- `estimate_send_fee`: quote actual recipients and memos at the selected priority
+  without reserving inputs. Existing estimate APIs remain available.
+- `send_transaction_at_fee_limit`: check the signed kernel fee against the confirmed
+  absolute maximum before broadcast; release reservations on refusal.
+
+### Fixed
+- Separate outgoing recipient amount and fee in send results, page reads and scan
+  events. Preserve the upstream debit/change ledger. Signed kernels supply local
+  fees; restored change memos require matching owned outputs and ledger totals.
+  Otherwise retain the known net debit with no fee. Consumers must not subtract
+  the displayed fee again.
+- Derive incoming PayRefs from received mined outputs and outgoing references from
+  recipient hashes and the actual mined block. Exclude change outputs from incoming
+  references; suppress references for unmined and rolled-back rows.
+- Include the abandoned send's required inputs in a resend quote, matching the
+  selection used to sign the replacement.
+
+
 ## [0.4.0] — 2026-11-11
 
 Additive only: existing Dart code builds and behaves as on 0.3.1.

@@ -18,3 +18,5 @@ pub(crate) mod address;
 pub(crate) mod keys;
 pub(crate) mod text;
 pub(crate) mod validation;
+
+pub(crate) mod history;

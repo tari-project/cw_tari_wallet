@@ -408,8 +408,34 @@ where
 /// [`send_transaction_with_handler`] built at `fee_per_gram` (µT per gram).
 #[frb(ignore)]
 pub async fn send_transaction_at_fee_with_handler<F>(
+    details: MultiSendTransactionDetails,
+    fee_per_gram: u64,
+    status_callback: F,
+) -> Result<SendResultDto>
+where
+    F: Fn(SendTransactionEvent) + Send + Sync + 'static,
+{
+    send_at_fee_inner(details, fee_per_gram, None, status_callback).await
+}
+
+/// The same workflow with an absolute, user-confirmed kernel-fee ceiling.
+#[frb(ignore)]
+pub async fn send_transaction_at_fee_limit_with_handler<F>(
+    details: MultiSendTransactionDetails,
+    fee_per_gram: u64,
+    max_fee: u64,
+    status_callback: F,
+) -> Result<SendResultDto>
+where
+    F: Fn(SendTransactionEvent) + Send + Sync + 'static,
+{
+    send_at_fee_inner(details, fee_per_gram, Some(max_fee), status_callback).await
+}
+
+async fn send_at_fee_inner<F>(
     mut details: MultiSendTransactionDetails,
     fee_per_gram: u64,
+    max_fee: Option<u64>,
     status_callback: F,
 ) -> Result<SendResultDto>
 where
@@ -427,6 +453,9 @@ where
 
     report(TransactionStage::ValidatingInput, "Parsing inputs...");
     validate_fee_per_gram(fee_per_gram, MAX_FEE_PER_GRAM)?;
+    if max_fee == Some(0) {
+        return Err(WalletError::wallet("Confirmed maximum fee must be positive").into());
+    }
     let validated = validate_inputs(&details)?;
 
     apply_network(validated.network)?;
@@ -515,6 +544,23 @@ where
         }
     };
 
+    let actual_fee = match crate::domain::history::kernel_fee(
+        &signed_transaction.signed_transaction.transaction,
+    ) {
+        Ok(fee) => fee,
+        Err(error) => {
+            release_send_reservation(&pending_transaction_id);
+            return Err(error);
+        }
+    };
+    if max_fee.is_some_and(|maximum| actual_fee > maximum) {
+        release_send_reservation(&pending_transaction_id);
+        return Err(WalletError::wallet(
+            "Transaction fee exceeds the confirmed maximum; request a new quote",
+        )
+        .into());
+    }
+
     // Finalize reads the keys again (change output) through the session. Never record
     // or broadcast unless the wallet is seen unlocked, in the send's own database.
     if !unlocked_in(&sender.db_pool, &details.wallet_name) {
@@ -529,7 +575,7 @@ where
         .take()
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
 
-    let sent = match sender
+    let mut sent = match sender
         .finalize_transaction_and_broadcast(signed_transaction, base_url)
         .await
     {
@@ -554,6 +600,8 @@ where
     }
 
     // The final event carries exactly what the call resolves to.
+    // Use the kernels we actually signed; no fallible post-broadcast database read.
+    crate::domain::history::normalize_local_send(&mut sent.displayed_transaction, actual_fee);
     let result = SendResultDto::from(sent);
     status_callback(SendTransactionEvent {
         stage: TransactionStage::Broadcasted,
@@ -690,6 +738,89 @@ pub async fn send_transaction_at_fee(
     send_transaction_at_fee_with_handler(details, fee_per_gram, move |event| {
         // As `send_transaction`: never abort a half-broadcast send.
         let _ = sink.add(event);
+    })
+    .await
+}
+
+/// Send at the selected rate, refusing to broadcast if the actual signed kernel fee
+/// exceeds the total fee confirmed in Cake. Releases reservations on refusal.
+/// A closed sink continues an already-broadcast send, exactly as the older APIs do.
+#[frb]
+pub async fn send_transaction_at_fee_limit(
+    sink: StreamSink<SendTransactionEvent>,
+    details: MultiSendTransactionDetails,
+    fee_per_gram: u64,
+    max_fee: u64,
+) -> Result<SendResultDto> {
+    send_transaction_at_fee_limit_with_handler(details, fee_per_gram, max_fee, move |event| {
+        let _ = sink.add(event);
+    })
+    .await
+}
+
+/// Quote a concrete ordinary send using its recipients, memos and selected rate.
+/// No inputs are reserved and nothing is broadcast. The absolute fee is conservative;
+/// `send_transaction_at_fee_limit` checks the signed fee again before broadcast.
+#[frb]
+pub async fn estimate_send_fee(
+    details: MultiSendTransactionDetails,
+    priority: crate::api::fee::FeePriority,
+) -> Result<crate::api::fee::FeeEstimate> {
+    use minotari_wallet::transactions::{
+        fee_estimator::estimated_output_size_for_recipients, input_selector::InputSelector,
+    };
+    let validated = validate_inputs(&details)?;
+    anyhow::ensure!(
+        !details.send_all,
+        "Use estimate_send_all_fee_at for a sweep"
+    );
+    let pool = get_db_pool()?;
+    let fee_per_gram = crate::api::fee::get_fee_per_gram(
+        priority,
+        details
+            .base_url
+            .clone()
+            .unwrap_or_else(|| DEFAULT_BASE_URL.to_owned()),
+    )
+    .await?;
+    let output_size = estimated_output_size_for_recipients(&validated.recipients)?;
+    let amount = validated
+        .recipients
+        .iter()
+        .try_fold(0u64, |total, recipient| {
+            total
+                .checked_add(recipient.amount.0)
+                .ok_or_else(|| anyhow::anyhow!("Recipient total overflows"))
+        })?;
+    blocking(move || {
+        let conn = pool.get()?;
+        let account = minotari_wallet::db::get_account_by_name(&conn, &details.wallet_name)?
+            .ok_or(WalletError::NoAccounts)?;
+        // A resend must quote the same released inputs it will spend at signing.
+        let required_inputs = match validated.conflicts_with {
+            Some(tx_id) => {
+                resolve_conflict(&conn, account.id, tx_id, validated.confirmations)?.required_inputs
+            }
+            None => Vec::new(),
+        };
+        let selection = InputSelector::new(account.id, validated.confirmations)
+            .fetch_unspent_outputs_with_required(
+                &conn,
+                MicroMinotari(amount),
+                validated.recipients.len(),
+                MicroMinotari(fee_per_gram),
+                Some(output_size),
+                &required_inputs,
+            )?;
+        let fee = selection.fee().0;
+        Ok(crate::api::fee::FeeEstimate {
+            estimated_fee: fee,
+            total_amount_required: amount
+                .checked_add(fee)
+                .ok_or_else(|| anyhow::anyhow!("Amount plus fee overflows"))?,
+            fee_per_gram,
+            input_count: selection.utxos.len(),
+        })
     })
     .await
 }

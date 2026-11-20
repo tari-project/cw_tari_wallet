@@ -526,6 +526,71 @@ pub struct ScanConfiguration {
 /// must keep going for a cancelled scan to finish. A closed Dart stream (callback
 /// `Err`) cancels the scan, and later events are read but not delivered. **Scans cancel
 /// on a closed stream**; sends deliberately continue (see `send_transaction`).
+// Normalize the raw event snapshot before conversion, just as paginated reads do.
+// Database I/O runs off the async runtime and never holds a connection over network I/O.
+async fn map_history_event(event: ProcessingEvent) -> Result<Option<ScanEventDto>> {
+    match event {
+        ProcessingEvent::TransactionsReady(e) if !e.transactions.is_empty() => {
+            tokio::task::spawn_blocking(move || {
+                let conn = get_db_connection()?;
+                let transactions = e
+                    .transactions
+                    .into_iter()
+                    .map(|tx| crate::api::transactions::history_dto(&conn, tx))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Some(ScanEventDto::TransactionsReady(
+                    TransactionsReadyDto {
+                        account_id: e.account_id,
+                        transactions,
+                        block_height: e.block_height,
+                        is_initial_sync: e.is_initial_sync,
+                        abandoned_then_mined_ids: None,
+                    },
+                )))
+            })
+            .await?
+        }
+        ProcessingEvent::TransactionsUpdated(e) if !e.updated_transactions.is_empty() => {
+            tokio::task::spawn_blocking(move || {
+                let conn = get_db_connection()?;
+                let updated_transactions = e
+                    .updated_transactions
+                    .into_iter()
+                    .map(|tx| crate::api::transactions::history_dto(&conn, tx))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Some(ScanEventDto::TransactionsUpdated(
+                    TransactionsUpdatedDto {
+                        account_id: e.account_id,
+                        updated_transactions,
+                        abandoned_then_mined_ids: None,
+                    },
+                )))
+            })
+            .await?
+        }
+        ProcessingEvent::ReorgDetected(e) if !e.reorganized_displayed_transactions.is_empty() => {
+            tokio::task::spawn_blocking(move || {
+                let conn = get_db_connection()?;
+                let reorganized_transactions = e
+                    .reorganized_displayed_transactions
+                    .into_iter()
+                    .map(|tx| crate::api::transactions::history_dto(&conn, tx))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Some(ScanEventDto::ReorgDetected(ReorgDetectedDto {
+                    account_id: e.account_id,
+                    reorg_from_height: e.reorg_from_height,
+                    new_height: e.new_height,
+                    blocks_rolled_back: e.blocks_rolled_back,
+                    cancelled_transaction_ids: e.cancelled_transaction_ids,
+                    reorganized_transactions,
+                })))
+            })
+            .await?
+        }
+        other => Ok(map_processing_event(other)),
+    }
+}
+
 async fn run_forwarder<F>(
     mut rx: EventReceiver,
     cancel_token: CancellationToken,
@@ -537,11 +602,22 @@ where
     let mut terminal = None;
     let mut sink_open = true;
     while let Some(event) = rx.recv().await {
-        let Some(dto) = map_processing_event(event) else {
-            continue;
+        let dto = match map_history_event(event).await {
+            Ok(Some(dto)) => dto,
+            Ok(None) => continue,
+            Err(error) => {
+                terminal = Some(ScanEventDto::Error(format!(
+                    "Failed to read wallet history: {error:#}"
+                )));
+                cancel_token.cancel();
+                sink_open = false;
+                continue;
+            }
         };
         if is_terminal(&dto) {
-            terminal = Some(dto);
+            if !matches!(terminal, Some(ScanEventDto::Error(_))) {
+                terminal = Some(dto);
+            }
             continue;
         }
         if !sink_open {
